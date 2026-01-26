@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U 扫描器</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="app">
+        <header class="toolbar">
+            <div class="toolbar-left">
+                <h1>M3U 扫描器</h1>
+            </div>
+            <div class="toolbar-center">
+                <label class="file-btn">
+                    <input type="file" id="fileInput" accept=".m3u,.m3u8" hidden>
+                    <span>📁 打开文件</span>
+                </label>
+                <button id="urlBtn" class="btn">🌐 打开URL</button>
+                <div class="separator"></div>
+                <button id="scanBtn" class="btn primary" disabled>▶️ 开始扫描</button>
+                <button id="stopBtn" class="btn danger" disabled>⏹️ 停止</button>
+                <div class="separator"></div>
+                <label class="checkbox">
+                    <input type="checkbox" id="quickCheck">
+                    <span>快速检测</span>
+                </label>
+                <div class="separator"></div>
+                <button id="exportBtn" class="btn" disabled>💾 导出</button>
+            </div>
+            <div class="toolbar-right">
+                <button id="themeBtn" class="btn icon-btn" onclick="toggleTheme()">🌙</button>
+                <button id="settingsBtn" class="btn icon-btn">⚙️ 设置</button>
+            </div>
+        </header>
+
+        <main class="content">
+            <div class="sidebar">
+                <div class="filter-bar">
+                    <input type="text" id="filterInput" placeholder="搜索频道...">
+                    <select id="groupFilter" onchange="renderChannelList()">
+                        <option value="">全部分组</option>
+                    </select>
+                    <select id="resolutionFilter" onchange="renderChannelList()">
+                        <option value="">全部分辨率</option>
+                        <option value="4k">4K (2160p)</option>
+                        <option value="1080p">1080p</option>
+                        <option value="1080i">1080i</option>
+                        <option value="720p">720p</option>
+                        <option value="576">576p/576i</option>
+                        <option value="480">480p/480i</option>
+                        <option value="other">其他</option>
+                        <option value="unscanned">未扫描</option>
+                    </select>
+                    <select id="sortBy" onchange="renderChannelList()">
+                        <option value="default">默认排序</option>
+                        <option value="name">按名称</option>
+                        <option value="response">按响应速度</option>
+                        <option value="resolution">按分辨率</option>
+                    </select>
+                    <label class="checkbox">
+                        <input type="checkbox" id="showAvailable">
+                        <span>仅显示可用</span>
+                    </label>
+                </div>
+                <div class="channel-list" id="channelList"></div>
+            </div>
+            <div class="detail-panel" id="detailPanel">
+                <div class="empty-state">
+                    <p>选择一个频道查看详情</p>
+                </div>
+            </div>
+        </main>
+
+        <footer class="statusbar">
+            <span id="statusText">就绪</span>
+            <div class="progress-container" id="progressContainer" style="display:none">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <span id="ffprobeStatus"></span>
+        </footer>
+    </div>
+
+    <!-- URL Modal -->
+    <div class="modal" id="urlModal">
+        <div class="modal-content">
+            <h3>打开 M3U URL</h3>
+            <input type="text" id="urlInput" placeholder="https://example.com/playlist.m3u">
+            <div class="modal-actions">
+                <button class="btn" onclick="closeModal('urlModal')">取消</button>
+                <button class="btn primary" id="loadUrlBtn">加载</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal" id="settingsModal">
+        <div class="modal-content settings-modal">
+            <h3>⚙️ 设置</h3>
+            
+            <div class="settings-section">
+                <h4>扫描设置</h4>
+                <div class="form-group">
+                    <label>并发数 (1-100)</label>
+                    <input type="number" id="concurrencyInput" value="20" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label>超时时间 (秒)</label>
+                    <input type="number" id="timeoutInput" value="15" min="5" max="120">
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h4>User-Agent</h4>
+                <div class="form-group">
+                    <select id="uaPreset" onchange="selectUserAgent()">
+                        <option value="">默认 (Mozilla/5.0...)</option>
+                        <option value="okhttp">okhttp/3.10.0</option>
+                        <option value="okhttp-mod">okHttp/Mod-1.5.0.0</option>
+                        <option value="android">Android (Chrome)</option>
+                        <option value="ios">iOS (Safari)</option>
+                        <option value="windows">Windows (Chrome)</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </div>
+                <div class="form-group" id="customUaGroup" style="display:none">
+                    <label>自定义 User-Agent</label>
+                    <textarea id="customUa" rows="3" placeholder="输入自定义 User-Agent"></textarea>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn" onclick="closeModal('settingsModal')">取消</button>
+                <button class="btn primary" id="saveSettingsBtn">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Player Modal -->
+    <div class="modal" id="playerModal">
+        <div class="modal-content player-modal">
+            <div class="modal-header">
+                <h3>📺 选择播放器</h3>
+                <button class="close-btn" onclick="closeModal('playerModal')">✕</button>
+            </div>
+            
+            <div class="player-grid">
+                <button class="player-btn" onclick="playWith('potplayer')">
+                    <div class="player-icon">🎬</div>
+                    <div class="player-name">PotPlayer</div>
+                </button>
+                <button class="player-btn" onclick="playWith('vlc')">
+                    <div class="player-icon">🎥</div>
+                    <div class="player-name">VLC</div>
+                </button>
+                <button class="player-btn" onclick="playWith('mpv')">
+                    <div class="player-icon">▶️</div>
+                    <div class="player-name">MPV</div>
+                </button>
+                <button class="player-btn" onclick="playWith('iina')">
+                    <div class="player-icon">🎞️</div>
+                    <div class="player-name">IINA</div>
+                </button>
+                <button class="player-btn" onclick="playWith('nplayer')">
+                    <div class="player-icon">📱</div>
+                    <div class="player-name">nPlayer</div>
+                </button>
+                <button class="player-btn" onclick="playWith('infuse')">
+                    <div class="player-icon">🎯</div>
+                    <div class="player-name">Infuse</div>
+                </button>
+                <button class="player-btn" onclick="playWith('mxplayer')">
+                    <div class="player-icon">📺</div>
+                    <div class="player-name">MX Player</div>
+                </button>
+                <button class="player-btn" onclick="playWith('kodi')">
+                    <div class="player-icon">🎮</div>
+                    <div class="player-name">Kodi</div>
+                </button>
+            </div>
+
+            <div class="player-section">
+                <h4>🌐 网页播放</h4>
+                <button class="btn primary full-width" onclick="playInBrowser()">在浏览器中播放</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Web Player Modal -->
+    <div class="modal" id="webPlayerModal">
+        <div class="modal-content web-player-modal">
+            <div class="modal-header">
+                <h3 id="playerTitle">正在播放</h3>
+                <button class="close-btn" onclick="closeModal('webPlayerModal'); stopWebPlayer()">✕</button>
+            </div>
+            <div class="web-player-container">
+                <video id="webPlayer" controls autoplay>
+                    您的浏览器不支持视频播放
+                </video>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Modal -->
+    <div class="modal" id="statsModal">
+        <div class="modal-content stats-modal">
+            <div class="modal-header">
+                <h3>📊 扫描统计</h3>
+                <button class="close-btn" onclick="closeModal('statsModal')">✕</button>
+            </div>
+            <div id="statsContent">
+                <!-- Stats will be populated by JS -->
+            </div>
+            <div class="stats-export-section">
+                <h4>导出结果</h4>
+                <div class="export-buttons">
+                    <button class="btn" onclick="window.location.href='/api/export'">📺 M3U (仅可用)</button>
+                    <button class="btn" onclick="window.location.href='/api/export/json'">📄 JSON (全部)</button>
+                    <button class="btn" onclick="window.location.href='/api/export/csv'">📊 CSV (全部)</button>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn primary" onclick="closeModal('statsModal')">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="/app.js"></script>
+</body>
+</html>
