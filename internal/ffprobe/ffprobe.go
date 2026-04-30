@@ -259,16 +259,8 @@ func Probe(url string, timeout time.Duration) *StreamInfo {
 	info.Format = parseFormat(probeOutput.Format)
 	info.VideoStreams, info.AudioStreams = parseStreams(probeOutput.Streams, nil, info.Format)
 
-	// 第二步：如果码率为0，单独获取packets来计算
-	needBitrateCalc := false
-	for _, v := range info.VideoStreams {
-		if v.BitRate == 0 {
-			needBitrateCalc = true
-			break
-		}
-	}
-
-	if needBitrateCalc && ctx.Err() == nil {
+	// 第二步：通过采样packets计算码率和判断CBR/VBR模式
+	if ctx.Err() == nil {
 		calcBitrateFromPackets(ctx, url, info)
 	}
 
@@ -363,12 +355,12 @@ func calcBitrateFromPackets(ctx context.Context, url string, info *StreamInfo) {
 		mode = "ABR"
 	}
 
-	// 更新视频流信息
+	// 更新视频流信息：始终设置模式，仅在码率为0时覆盖
 	for i := range info.VideoStreams {
 		if info.VideoStreams[i].BitRate == 0 {
 			info.VideoStreams[i].BitRate = bitRate
-			info.VideoStreams[i].BitRateMode = mode
 		}
+		info.VideoStreams[i].BitRateMode = mode
 	}
 }
 
