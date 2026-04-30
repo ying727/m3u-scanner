@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -28,8 +29,8 @@ type M3UPlaylist struct {
 }
 
 var (
-	extinfRegex = regexp.MustCompile(`#EXTINF:(-?\d+)\s*(.*)?,(.*)`)
-	attrRegex   = regexp.MustCompile(`(\w+(?:-\w+)*)="([^"]*)"`)
+	extinfDurRegex = regexp.MustCompile(`#EXTINF:(-?\d+)\s*(.*)`)
+	attrRegex      = regexp.MustCompile(`(\w+(?:-\w+)*)="([^"]*)"`)
 )
 
 // ParseFile parses an M3U file from a local path
@@ -64,6 +65,9 @@ func ParseURLWithUA(url, userAgent string) (*M3UPlaylist, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
 	return parse(resp.Body)
 }
 
@@ -124,31 +128,45 @@ func parseExtInf(line string) Channel {
 		Attributes: make(map[string]string),
 	}
 
-	matches := extinfRegex.FindStringSubmatch(line)
-	if len(matches) >= 4 {
-		channel.Name = strings.TrimSpace(matches[3])
-		attrStr := matches[2]
+	matches := extinfDurRegex.FindStringSubmatch(line)
+	if len(matches) < 3 {
+		return channel
+	}
 
-		// Parse all attributes
-		attrs := parseAttributes(attrStr)
-		channel.Attributes = attrs
+	remainder := matches[2]
+	attrStr, name := splitExtInfComma(remainder)
+	channel.Name = strings.TrimSpace(name)
 
-		// Extract common attributes
-		if v, ok := attrs["group-title"]; ok {
-			channel.GroupTitle = v
-		}
-		if v, ok := attrs["tvg-logo"]; ok {
-			channel.Logo = v
-		}
-		if v, ok := attrs["tvg-id"]; ok {
-			channel.TVGId = v
-		}
-		if v, ok := attrs["tvg-name"]; ok {
-			channel.TVGName = v
-		}
+	attrs := parseAttributes(attrStr)
+	channel.Attributes = attrs
+
+	if v, ok := attrs["group-title"]; ok {
+		channel.GroupTitle = v
+	}
+	if v, ok := attrs["tvg-logo"]; ok {
+		channel.Logo = v
+	}
+	if v, ok := attrs["tvg-id"]; ok {
+		channel.TVGId = v
+	}
+	if v, ok := attrs["tvg-name"]; ok {
+		channel.TVGName = v
 	}
 
 	return channel
+}
+
+// splitExtInfComma finds the first comma outside of quotes to split attributes from channel name.
+func splitExtInfComma(s string) (attrs, name string) {
+	inQuotes := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '"' {
+			inQuotes = !inQuotes
+		} else if s[i] == ',' && !inQuotes {
+			return s[:i], s[i+1:]
+		}
+	}
+	return s, ""
 }
 
 func parseAttributes(line string) map[string]string {

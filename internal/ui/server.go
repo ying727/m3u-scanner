@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"m3u-scanner/internal/epg"
 	"m3u-scanner/internal/ffprobe"
 	"m3u-scanner/internal/parser"
 	"m3u-scanner/internal/scanner"
@@ -30,17 +33,26 @@ var staticFiles embed.FS
 type Server struct {
 	playlist     *parser.M3UPlaylist
 	results      []scanner.ScanResult
+	resultIndex  map[string]int
 	resultsMutex sync.RWMutex
-	scanning     bool
-	scanMutex    sync.Mutex
-	cancelFunc   context.CancelFunc
-	progress     scanner.ScanProgress
+
+	scanning   bool
+	scanMutex  sync.Mutex
+	cancelFunc context.CancelFunc
+
+	progress scanner.ScanProgress
+
 	clients      map[chan string]bool
 	clientsMutex sync.Mutex
-	settings     Settings
-	thumbnails   map[string]string // URL -> base64 thumbnail
-	thumbMutex   sync.RWMutex
-	thumbDir     string
+
+	settings      Settings
+	settingsPath  string
+
+	thumbnails map[string]string // URL -> base64 thumbnail
+	thumbMutex sync.RWMutex
+	thumbDir   string
+
+	epgData *epg.EPG
 }
 
 // Settings holds scanner settings
@@ -54,58 +66,99 @@ type Settings struct {
 // NewServer creates a new web UI server
 func NewServer() *Server {
 	thumbDir := filepath.Join(os.TempDir(), "m3u-scanner-thumbnails")
-	os.MkdirAll(thumbDir, 0755)
+	_ = os.MkdirAll(thumbDir, 0755)
 
-	return &Server{
-		results:    make([]scanner.ScanResult, 0),
-		clients:    make(map[chan string]bool),
-		settings:   Settings{Concurrency: 20, Timeout: 15, QuickCheck: false},
-		thumbnails: make(map[string]string),
-		thumbDir:   thumbDir,
+	settingsPath := filepath.Join(configDir(), "settings.json")
+	s := &Server{
+		results:      make([]scanner.ScanResult, 0),
+		resultIndex:  make(map[string]int),
+		clients:      make(map[chan string]bool),
+		settings:     Settings{Concurrency: 20, Timeout: 15, QuickCheck: false},
+		settingsPath: settingsPath,
+		thumbnails:   make(map[string]string),
+		thumbDir:     thumbDir,
 	}
+	s.loadSettings()
+	return s
+}
+
+func configDir() string {
+	if exePath, err := os.Executable(); err == nil {
+		return filepath.Dir(exePath)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return "."
+}
+
+func (s *Server) loadSettings() {
+	data, err := os.ReadFile(s.settingsPath)
+	if err != nil {
+		return
+	}
+	var loaded Settings
+	if json.Unmarshal(data, &loaded) == nil {
+		s.settings = loaded
+	}
+}
+
+func (s *Server) saveSettings() {
+	data, err := json.MarshalIndent(s.settings, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(s.settingsPath), 0755)
+	_ = os.WriteFile(s.settingsPath, data, 0644)
 }
 
 // Run starts the web server
 func (s *Server) Run(port int) error {
+	mux := http.NewServeMux()
+
 	// API routes
-	http.HandleFunc("/api/upload", s.handleUpload)
-	http.HandleFunc("/api/load-url", s.handleLoadURL)
-	http.HandleFunc("/api/scan/start", s.handleStartScan)
-	http.HandleFunc("/api/scan/stop", s.handleStopScan)
-	http.HandleFunc("/api/results", s.handleResults)
-	http.HandleFunc("/api/export", s.handleExport)
-	http.HandleFunc("/api/export/json", s.handleExportJSON)
-	http.HandleFunc("/api/export/csv", s.handleExportCSV)
-	http.HandleFunc("/api/play", s.handlePlay)
-	http.HandleFunc("/api/settings", s.handleSettings)
-	http.HandleFunc("/api/status", s.handleStatus)
-	http.HandleFunc("/api/events", s.handleSSE)
-	http.HandleFunc("/api/thumbnail", s.handleThumbnail)
-	http.HandleFunc("/api/stream", s.handleStream)
-	http.HandleFunc("/api/scan/single", s.handleScanSingle)
+	mux.HandleFunc("/api/upload", s.handleUpload)
+	mux.HandleFunc("/api/load-url", s.handleLoadURL)
+	mux.HandleFunc("/api/scan/start", s.handleStartScan)
+	mux.HandleFunc("/api/scan/stop", s.handleStopScan)
+	mux.HandleFunc("/api/results", s.handleResults)
+	mux.HandleFunc("/api/export", s.handleExport)
+	mux.HandleFunc("/api/export/json", s.handleExportJSON)
+	mux.HandleFunc("/api/export/csv", s.handleExportCSV)
+	mux.HandleFunc("/api/play", s.handlePlay)
+	mux.HandleFunc("/api/settings", s.handleSettings)
+	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/events", s.handleSSE)
+	mux.HandleFunc("/api/thumbnail", s.handleThumbnail)
+	mux.HandleFunc("/api/stream", s.handleStream)
+	mux.HandleFunc("/api/scan/single", s.handleScanSingle)
+	mux.HandleFunc("/api/epg", s.handleEPG)
 
 	// Static files
-	http.HandleFunc("/", s.handleStatic)
+	mux.HandleFunc("/", s.handleStatic)
 
 	addr := fmt.Sprintf(":%d", port)
-	url := fmt.Sprintf("http://localhost:%d", port)
+	appURL := fmt.Sprintf("http://localhost:%d", port)
 
-	fmt.Printf("M3U Scanner 已启动: %s\n", url)
+	fmt.Printf("M3U Scanner 启动: %s\n", appURL)
 	fmt.Println("按 Ctrl+C 停止服务")
 
-	// Open browser
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		openBrowser(url)
+		openBrowser(appURL)
 	}()
 
-	return http.ListenAndServe(addr, nil)
+	return http.ListenAndServe(addr, mux)
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	if path == "/" {
 		path = "/index.html"
+	}
+	if strings.Contains(path, "..") {
+		http.NotFound(w, r)
+		return
 	}
 
 	content, err := staticFiles.ReadFile("static" + path)
@@ -114,17 +167,16 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set content type
 	switch {
-	case len(path) > 5 && path[len(path)-5:] == ".html":
+	case strings.HasSuffix(path, ".html"):
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	case len(path) > 4 && path[len(path)-4:] == ".css":
+	case strings.HasSuffix(path, ".css"):
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	case len(path) > 3 && path[len(path)-3:] == ".js":
+	case strings.HasSuffix(path, ".js"):
 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	}
 
-	w.Write(content)
+	_, _ = w.Write(content)
 }
 
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +192,6 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Create temp file
 	tmp, err := os.CreateTemp("", "m3u-*.m3u")
 	if err != nil {
 		jsonError(w, "创建临时文件失败", http.StatusInternalServerError)
@@ -148,8 +199,15 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.Remove(tmp.Name())
 
-	io.Copy(tmp, file)
-	tmp.Close()
+	if _, err := io.Copy(tmp, file); err != nil {
+		_ = tmp.Close()
+		jsonError(w, "保存上传文件失败", http.StatusBadRequest)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		jsonError(w, "保存上传文件失败", http.StatusBadRequest)
+		return
+	}
 
 	playlist, err := parser.ParseFile(tmp.Name())
 	if err != nil {
@@ -177,6 +235,10 @@ func (s *Server) handleLoadURL(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "无效请求", http.StatusBadRequest)
 		return
 	}
+	if !isAllowedURL(req.URL) {
+		jsonError(w, "URL 不合法（仅支持公网 http/https）", http.StatusBadRequest)
+		return
+	}
 
 	s.resultsMutex.RLock()
 	userAgent := s.settings.UserAgent
@@ -197,19 +259,65 @@ func (s *Server) handleLoadURL(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) loadPlaylist(playlist *parser.M3UPlaylist) {
 	s.resultsMutex.Lock()
-	defer s.resultsMutex.Unlock()
-
 	s.playlist = playlist
 	s.results = make([]scanner.ScanResult, len(playlist.Channels))
+	s.resultIndex = make(map[string]int, len(playlist.Channels))
 	for i, ch := range playlist.Channels {
 		s.results[i] = scanner.ScanResult{Channel: ch}
+		s.resultIndex[ch.URL] = i
 	}
 	s.progress = scanner.ScanProgress{Total: len(playlist.Channels)}
+	s.resultsMutex.Unlock()
 
-	// Clear old thumbnails
 	s.thumbMutex.Lock()
 	s.thumbnails = make(map[string]string)
 	s.thumbMutex.Unlock()
+
+	// Load EPG asynchronously if URL is present
+	if playlist.EPGUrl != "" {
+		go func() {
+			epgData, err := epg.ParseURL(playlist.EPGUrl)
+			if err != nil {
+				log.Printf("EPG加载失败: %v", err)
+				return
+			}
+			s.resultsMutex.Lock()
+			s.epgData = epgData
+			s.resultsMutex.Unlock()
+			s.broadcast("epg_loaded")
+			log.Printf("EPG加载成功: %d个频道, %d个节目", len(epgData.Channels), len(epgData.Programmes))
+		}()
+	}
+}
+
+func (s *Server) handleEPG(w http.ResponseWriter, r *http.Request) {
+	channelID := r.URL.Query().Get("channel_id")
+	if channelID == "" {
+		jsonError(w, "需要channel_id参数", http.StatusBadRequest)
+		return
+	}
+
+	s.resultsMutex.RLock()
+	epgData := s.epgData
+	s.resultsMutex.RUnlock()
+
+	if epgData == nil {
+		jsonResponse(w, map[string]interface{}{"available": false})
+		return
+	}
+
+	channelEPG := epgData.GetChannelEPG(channelID)
+	if channelEPG == nil {
+		jsonResponse(w, map[string]interface{}{"available": false})
+		return
+	}
+
+	current := epgData.GetCurrentProgramme(channelID)
+	jsonResponse(w, map[string]interface{}{
+		"available": true,
+		"channel":   channelEPG,
+		"current":   current,
+	})
 }
 
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
@@ -224,32 +332,30 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "扫描正在进行中", http.StatusBadRequest)
 		return
 	}
-	s.scanning = true
-	s.scanMutex.Unlock()
 
 	s.resultsMutex.RLock()
-	if s.playlist == nil {
-		s.resultsMutex.RUnlock()
-		s.scanMutex.Lock()
-		s.scanning = false
+	playlist := s.playlist
+	s.resultsMutex.RUnlock()
+	if playlist == nil {
 		s.scanMutex.Unlock()
 		jsonError(w, "未加载播放列表", http.StatusBadRequest)
 		return
 	}
-	s.resultsMutex.RUnlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelFunc = cancel
+	s.scanning = true
+	s.scanMutex.Unlock()
 
-	go s.runScan(ctx)
-
+	go s.runScan(ctx, playlist)
 	jsonResponse(w, map[string]bool{"success": true})
 }
 
-func (s *Server) runScan(ctx context.Context) {
+func (s *Server) runScan(ctx context.Context, playlist *parser.M3UPlaylist) {
 	defer func() {
 		s.scanMutex.Lock()
 		s.scanning = false
+		s.cancelFunc = nil
 		s.scanMutex.Unlock()
 		s.broadcast("scan_complete")
 	}()
@@ -258,60 +364,64 @@ func (s *Server) runScan(ctx context.Context) {
 	concurrency := s.settings.Concurrency
 	timeout := s.settings.Timeout
 	quickCheck := s.settings.QuickCheck
-	playlistLen := len(s.playlist.Channels)
+	playlistLen := len(playlist.Channels)
 	s.resultsMutex.RUnlock()
 
-	// Validate concurrency
 	if concurrency <= 0 {
 		concurrency = 20
 	}
 	if concurrency > 100 {
 		concurrency = 100
 	}
+	if timeout <= 0 {
+		timeout = 15
+	}
 
-	sc := scanner.NewScanner(
-		concurrency,
-		time.Duration(timeout)*time.Second,
-		quickCheck,
-	)
-
+	sc := scanner.NewScanner(concurrency, time.Duration(timeout)*time.Second, quickCheck)
 	progressCh := make(chan scanner.ScanProgress, 100)
 	resultCh := make(chan scanner.ScanResult, playlistLen)
+	errCh := make(chan error, 1)
 
-	// Handle progress updates
 	go func() {
-		for p := range progressCh {
+		errCh <- sc.Scan(ctx, playlist, progressCh, resultCh)
+	}()
+
+	for progressCh != nil || resultCh != nil {
+		select {
+		case p, ok := <-progressCh:
+			if !ok {
+				progressCh = nil
+				continue
+			}
 			s.resultsMutex.Lock()
 			s.progress = p
 			s.resultsMutex.Unlock()
 			s.broadcast("progress")
-		}
-	}()
-
-	// Handle results
-	go func() {
-		for result := range resultCh {
+		case result, ok := <-resultCh:
+			if !ok {
+				resultCh = nil
+				continue
+			}
 			s.resultsMutex.Lock()
-			for i := range s.results {
-				if s.results[i].Channel.URL == result.Channel.URL {
-					s.results[i] = result
-					break
-				}
+			if idx, found := s.resultIndex[result.Channel.URL]; found {
+				s.results[idx] = result
 			}
 			s.resultsMutex.Unlock()
 		}
-	}()
+	}
 
-	s.resultsMutex.RLock()
-	playlist := s.playlist
-	s.resultsMutex.RUnlock()
-
-	sc.Scan(ctx, playlist, progressCh, resultCh)
+	if err := <-errCh; err != nil && err != context.Canceled {
+		log.Printf("scan error: %v", err)
+	}
 }
 
 func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
-	if s.cancelFunc != nil {
-		s.cancelFunc()
+	s.scanMutex.Lock()
+	cancel := s.cancelFunc
+	s.scanMutex.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 	jsonResponse(w, map[string]bool{"success": true})
 }
@@ -329,19 +439,20 @@ func (s *Server) handleScanSingle(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "无效请求", http.StatusBadRequest)
 		return
 	}
-
 	if req.URL == "" {
 		jsonError(w, "需要URL参数", http.StatusBadRequest)
 		return
 	}
 
-	// Get current settings
 	s.resultsMutex.RLock()
 	timeout := s.settings.Timeout
 	quickCheck := s.settings.QuickCheck
 	s.resultsMutex.RUnlock()
 
-	// Scan the single URL
+	if timeout <= 0 {
+		timeout = 15
+	}
+
 	var streamInfo *ffprobe.StreamInfo
 	if quickCheck {
 		ok, responseTime, err := ffprobe.CheckAvailability(req.URL, time.Duration(timeout)*time.Second)
@@ -356,20 +467,14 @@ func (s *Server) handleScanSingle(w http.ResponseWriter, r *http.Request) {
 		streamInfo = ffprobe.Probe(req.URL, time.Duration(timeout)*time.Second)
 	}
 
-	// Update the result in our results slice
 	s.resultsMutex.Lock()
-	for i := range s.results {
-		if s.results[i].Channel.URL == req.URL {
-			s.results[i].StreamInfo = streamInfo
-			s.results[i].ScannedAt = time.Now()
-			break
-		}
+	if i, ok := s.resultIndex[req.URL]; ok {
+		s.results[i].StreamInfo = streamInfo
+		s.results[i].ScannedAt = time.Now()
 	}
 	s.resultsMutex.Unlock()
 
-	// Broadcast update
 	s.broadcast("progress")
-
 	jsonResponse(w, map[string]interface{}{
 		"success":     true,
 		"stream_info": streamInfo,
@@ -378,33 +483,36 @@ func (s *Server) handleScanSingle(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	s.resultsMutex.RLock()
-	defer s.resultsMutex.RUnlock()
+	results := append([]scanner.ScanResult(nil), s.results...)
+	progress := s.progress
+	s.resultsMutex.RUnlock()
 
 	s.scanMutex.Lock()
 	scanning := s.scanning
 	s.scanMutex.Unlock()
 
 	jsonResponse(w, map[string]interface{}{
-		"results":  s.results,
-		"progress": s.progress,
+		"results":  results,
+		"progress": progress,
 		"scanning": scanning,
 	})
 }
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	s.resultsMutex.RLock()
-	defer s.resultsMutex.RUnlock()
+	results := append([]scanner.ScanResult(nil), s.results...)
+	s.resultsMutex.RUnlock()
 
 	w.Header().Set("Content-Type", "application/x-mpegurl")
 	w.Header().Set("Content-Disposition", "attachment; filename=available_channels.m3u")
 
-	w.Write([]byte("#EXTM3U\n"))
-	for _, result := range s.results {
+	_, _ = w.Write([]byte("#EXTM3U\n"))
+	for _, result := range results {
 		if result.StreamInfo == nil || !result.StreamInfo.Available {
 			continue
 		}
 		ch := result.Channel
-		line := fmt.Sprintf("#EXTINF:-1")
+		line := "#EXTINF:-1"
 		if ch.TVGId != "" {
 			line += fmt.Sprintf(` tvg-id="%s"`, ch.TVGId)
 		}
@@ -415,32 +523,32 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 			line += fmt.Sprintf(` group-title="%s"`, ch.GroupTitle)
 		}
 		line += fmt.Sprintf(",%s\n%s\n", ch.Name, ch.URL)
-		w.Write([]byte(line))
+		_, _ = w.Write([]byte(line))
 	}
 }
 
 func (s *Server) handleExportJSON(w http.ResponseWriter, r *http.Request) {
 	s.resultsMutex.RLock()
-	defer s.resultsMutex.RUnlock()
+	results := append([]scanner.ScanResult(nil), s.results...)
+	s.resultsMutex.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=scan_results.json")
-	json.NewEncoder(w).Encode(s.results)
+	_ = json.NewEncoder(w).Encode(results)
 }
 
 func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 	s.resultsMutex.RLock()
-	defer s.resultsMutex.RUnlock()
+	results := append([]scanner.ScanResult(nil), s.results...)
+	s.resultsMutex.RUnlock()
 
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=scan_results.csv")
 
-	// Write BOM for Excel compatibility
-	w.Write([]byte("\xEF\xBB\xBF"))
+	_, _ = w.Write([]byte("\xEF\xBB\xBF"))
+	_, _ = w.Write([]byte("name,url,available,resolution,codec,bitrate,response_time\n"))
 
-	w.Write([]byte("name,url,available,resolution,codec,bitrate,response_time\n"))
-
-	for _, result := range s.results {
+	for _, result := range results {
 		ch := result.Channel
 		info := result.StreamInfo
 
@@ -453,7 +561,7 @@ func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 		if info != nil {
 			if info.Available {
 				available = "true"
-				responseTime = fmt.Sprintf("%d", info.ResponseTime/1000000) // ms
+				responseTime = fmt.Sprintf("%d", info.ResponseTime/1000000)
 			}
 
 			if len(info.VideoStreams) > 0 {
@@ -464,7 +572,6 @@ func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Escape CSV fields
 		line := fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s\n",
 			escapeCSV(ch.Name),
 			escapeCSV(ch.URL),
@@ -474,13 +581,13 @@ func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 			bitrate,
 			responseTime,
 		)
-		w.Write([]byte(line))
+		_, _ = w.Write([]byte(line))
 	}
 }
 
 func escapeCSV(s string) string {
 	if containsAny(s, ",\"\n\r") {
-		return fmt.Sprintf("\"%s\"", replaceAll(s, "\"", "\"\""))
+		return fmt.Sprintf("\"%s\"", strings.ReplaceAll(s, "\"", "\"\""))
 	}
 	return s
 }
@@ -494,10 +601,6 @@ func containsAny(s, chars string) bool {
 		}
 	}
 	return false
-}
-
-func replaceAll(s, old, new string) string {
-	return strings.ReplaceAll(s, old, new)
 }
 
 func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
@@ -514,7 +617,6 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 
 	switch player {
 	case "potplayer":
-		// PotPlayer URL scheme
 		if runtime.GOOS == "windows" {
 			cmd = exec.Command("cmd", "/c", "start", "", "potplayer://"+streamURL)
 		}
@@ -533,25 +635,20 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	case "mpv":
 		cmd = exec.Command("mpv", streamURL)
 	case "nplayer":
-		// nPlayer URL scheme (iOS/macOS)
 		cmd = exec.Command("open", "nplayer-"+streamURL)
 	case "infuse":
-		// Infuse URL scheme
 		cmd = exec.Command("open", "infuse://x-callback-url/play?url="+streamURL)
 	case "mxplayer":
-		// MX Player (Android)
 		if runtime.GOOS == "windows" {
 			cmd = exec.Command("cmd", "/c", "start", "", "intent://"+streamURL+"#Intent;package=com.mxtech.videoplayer.ad;end")
 		}
 	case "kodi":
-		// Kodi JSON-RPC
 		if runtime.GOOS == "windows" {
 			cmd = exec.Command("cmd", "/c", "start", "", "kodi://"+streamURL)
 		} else {
 			cmd = exec.Command("kodi", streamURL)
 		}
 	default:
-		// Default: try common players
 		switch runtime.GOOS {
 		case "windows":
 			for _, p := range []string{"vlc", "mpv", "ffplay"} {
@@ -590,8 +687,11 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "需要URL参数", http.StatusBadRequest)
 		return
 	}
+	if !isAllowedURL(streamURL) {
+		jsonError(w, "URL 不合法", http.StatusBadRequest)
+		return
+	}
 
-	// Check cache
 	s.thumbMutex.RLock()
 	if thumb, ok := s.thumbnails[streamURL]; ok {
 		s.thumbMutex.RUnlock()
@@ -600,14 +700,12 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 	s.thumbMutex.RUnlock()
 
-	// Generate thumbnail using ffmpeg
 	thumb, err := s.generateThumbnail(streamURL)
 	if err != nil {
 		jsonError(w, "生成缩略图失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Cache it
 	s.thumbMutex.Lock()
 	s.thumbnails[streamURL] = thumb
 	s.thumbMutex.Unlock()
@@ -616,12 +714,10 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) generateThumbnail(streamURL string) (string, error) {
-	// Create unique filename
 	hash := md5.Sum([]byte(streamURL))
 	filename := fmt.Sprintf("%x.jpg", hash)
 	outputPath := filepath.Join(s.thumbDir, filename)
 
-	// Check if already exists
 	if _, err := os.Stat(outputPath); err == nil {
 		data, err := os.ReadFile(outputPath)
 		if err == nil {
@@ -629,14 +725,10 @@ func (s *Server) generateThumbnail(streamURL string) (string, error) {
 		}
 	}
 
-	// Get ffmpeg path (same directory logic as ffprobe)
 	ffmpegPath := getFFmpegPath()
-
-	// Generate thumbnail
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 使用全局信号量控制ffmpeg并发
 	if !ffprobe.AcquireSemaphore(ctx) {
 		return "", ctx.Err()
 	}
@@ -656,7 +748,6 @@ func (s *Server) generateThumbnail(streamURL string) (string, error) {
 		return "", err
 	}
 
-	// Read and encode
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		return "", err
@@ -672,8 +763,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "需要URL参数", http.StatusBadRequest)
 		return
 	}
+	if !isAllowedURL(streamURL) {
+		http.Error(w, "URL 不合法", http.StatusBadRequest)
+		return
+	}
 
-	// Proxy the request
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", streamURL, nil)
 	if err != nil {
@@ -681,9 +775,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy headers
 	req.Header.Set("User-Agent", "Mozilla/5.0")
-
 	resp, err := client.Do(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -691,18 +783,15 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Copy response headers
 	for k, v := range resp.Header {
 		for _, vv := range v {
 			w.Header().Add(k, vv)
 		}
 	}
 
-	// Enable CORS for video playback
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -717,11 +806,10 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		var newSettings Settings
 		if err := json.NewDecoder(r.Body).Decode(&newSettings); err != nil {
-			jsonError(w, "无效的设置", http.StatusBadRequest)
+			jsonError(w, "无效设置", http.StatusBadRequest)
 			return
 		}
 
-		// Validate
 		if newSettings.Concurrency <= 0 {
 			newSettings.Concurrency = 20
 		}
@@ -738,6 +826,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		s.resultsMutex.Lock()
 		s.settings = newSettings
 		s.resultsMutex.Unlock()
+		s.saveSettings()
 
 		jsonResponse(w, newSettings)
 		return
@@ -768,6 +857,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		s.clientsMutex.Lock()
 		delete(s.clients, ch)
 		s.clientsMutex.Unlock()
+		close(ch)
 	}()
 
 	flusher, ok := w.(http.Flusher)
@@ -779,7 +869,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case msg := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
 			flusher.Flush()
 		case <-r.Context().Done():
 			return
@@ -800,24 +890,28 @@ func (s *Server) broadcast(event string) {
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("json encode error: %v", err)
+	}
 }
 
 func jsonError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		log.Printf("json encode error: %v", err)
+	}
 }
 
-func openBrowser(url string) {
+func openBrowser(appURL string) {
 	var err error
 	switch runtime.GOOS {
 	case "windows":
-		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", appURL).Start()
 	case "darwin":
-		err = exec.Command("open", url).Start()
+		err = exec.Command("open", appURL).Start()
 	default:
-		err = exec.Command("xdg-open", url).Start()
+		err = exec.Command("xdg-open", appURL).Start()
 	}
 	if err != nil {
 		log.Printf("打开浏览器失败: %v", err)
@@ -831,7 +925,6 @@ func getFFmpegPath() string {
 		name = "ffmpeg.exe"
 	}
 
-	// Check same directory as executable
 	if exePath, err := os.Executable(); err == nil {
 		localPath := filepath.Join(filepath.Dir(exePath), name)
 		if _, err := os.Stat(localPath); err == nil {
@@ -839,7 +932,6 @@ func getFFmpegPath() string {
 		}
 	}
 
-	// Check current working directory
 	if cwd, err := os.Getwd(); err == nil {
 		localPath := filepath.Join(cwd, name)
 		if _, err := os.Stat(localPath); err == nil {
@@ -847,10 +939,52 @@ func getFFmpegPath() string {
 		}
 	}
 
-	// Fall back to PATH
 	if path, err := exec.LookPath(name); err == nil {
 		return path
 	}
 
 	return name
+}
+
+func isHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
+
+// isAllowedURL checks that the URL is http(s) and does not point to a private/internal IP
+func isAllowedURL(raw string) bool {
+	if !isHTTPURL(raw) {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	// Check if it's an IP literal
+	if ip := net.ParseIP(host); ip != nil {
+		return !isPrivateIP(ip)
+	}
+	// For hostnames, resolve and check all IPs
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
