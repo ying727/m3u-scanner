@@ -3,80 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>M3U 扫描器</title>
+    <title>M3U Scanner</title>
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
     <div class="app">
         <header class="toolbar">
             <div class="toolbar-left">
-                <h1>M3U 扫描器</h1>
+                <h1>M3U SCANNER</h1>
             </div>
             <div class="toolbar-center">
                 <label class="file-btn">
                     <input type="file" id="fileInput" accept=".m3u,.m3u8" hidden>
-                    <span>📁 打开文件</span>
+                    <span style="margin-right: 4px">📄</span> 本地文件
                 </label>
-                <button id="urlBtn" class="btn">🌐 打开URL</button>
+                <button id="urlBtn" class="btn"><span style="margin-right: 4px">🔗</span> 网络 URL</button>
                 <div class="separator"></div>
-                <button id="scanBtn" class="btn primary" disabled>▶️ 开始扫描</button>
-                <button id="stopBtn" class="btn danger" disabled>⏹️ 停止</button>
+                <button id="scanBtn" class="btn primary" disabled>开始扫描</button>
+                <button id="stopBtn" class="btn danger" disabled>停止</button>
                 <div class="separator"></div>
                 <label class="checkbox">
                     <input type="checkbox" id="quickCheck">
                     <span>快速检测</span>
                 </label>
                 <div class="separator"></div>
-                <button id="exportBtn" class="btn" disabled>💾 导出</button>
+                <button id="exportBtn" class="btn" disabled>导出</button>
             </div>
             <div class="toolbar-right">
-                <button id="themeBtn" class="btn icon-btn">🌙</button>
-                <button id="settingsBtn" class="btn icon-btn">⚙️ 设置</button>
+                <button id="themeBtn" class="btn icon-btn" title="切换主题">🌗</button>
+                <button id="settingsBtn" class="btn icon-btn" title="设置">⚙️</button>
             </div>
         </header>
 
         <main class="content">
             <div class="sidebar">
                 <div class="filter-bar">
-                    <input type="text" id="filterInput" placeholder="搜索频道...">
-                    <select id="groupFilter">
-                        <option value="">全部分组</option>
-                    </select>
-                    <select id="resolutionFilter">
-                        <option value="">全部分辨率</option>
-                        <option value="4k">4K (2160p)</option>
-                        <option value="1080p">1080p</option>
-                        <option value="1080i">1080i</option>
-                        <option value="720p">720p</option>
-                        <option value="576">576p/576i</option>
-                        <option value="480">480p/480i</option>
-                        <option value="other">其他</option>
-                        <option value="unscanned">未扫描</option>
-                    </select>
-                    <select id="sortBy">
-                        <option value="default">默认排序</option>
-                        <option value="name">按名称</option>
-                        <option value="response">按响应速度</option>
-                        <option value="resolution">按分辨率</option>
-                    </select>
-                    <label class="checkbox">
-                        <input type="checkbox" id="showAvailable">
-                        <span>仅显示可用</span>
-                    </label>
+                    <div class="filter-row">
+                        <input type="text" id="filterInput" placeholder="搜索频道或分组...">
+                    </div>
+                    <div class="filter-row">
+                        <select id="groupFilter">
+                            <option value="">全部分组</option>
+                        </select>
+                        <select id="resolutionFilter">
+                            <option value="">全部分辨率</option>
+                            <option value="4k">4K (2160p)</option>
+                            <option value="1080p">1080p</option>
+                            <option value="1080i">1080i</option>
+                            <option value="720p">720p</option>
+                            <option value="576">576p/576i</option>
+                            <option value="480">480p/480i</option>
+                            <option value="other">其他</option>
+                            <option value="unscanned">未扫描</option>
+                        </select>
+                    </div>
+                    <div class="filter-row" style="align-items: center;">
+                        <select id="sortBy" style="flex: 2;">
+                            <option value="default">默认排序</option>
+                            <option value="name">按名称</option>
+                            <option value="response">按响应速度</option>
+                            <option value="resolution">按分辨率</option>
+                        </select>
+                        <label class="checkbox" style="margin-left: auto; flex: 1; justify-content: flex-end;">
+                            <input type="checkbox" id="showAvailable">
+                            <span>仅看可用</span>
+                        </label>
+                    </div>
                 </div>
                 <div class="channel-list" id="channelList"></div>
             </div>
             <div class="detail-panel" id="detailPanel">
                 <div class="empty-state">
-                    <p>选择一个频道查看详情</p>
+                    <span>SELECT A CHANNEL TO VIEW DETAILS</span>
                 </div>
             </div>
         </main>
 
         <footer class="statusbar">
-            <span id="statusText">就绪</span>
-            <div class="progress-container" id="progressContainer" style="display:none">
-                <div class="progress-bar" id="progressBar"></div>
+            <div style="display: flex; align-items: center;">
+                <span id="statusText">系统就绪</span>
+                <div class="progress-container" id="progressContainer" style="display:none">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
             </div>
             <span id="ffprobeStatus"></span>
         </footer>
@@ -84,8 +92,11 @@
 
     <!-- URL Modal -->
     <div class="modal" id="urlModal">
-        <div class="modal-content">
-            <h3>打开 M3U URL</h3>
+        <div class="modal-content" style="min-width: 500px;">
+            <div class="modal-header">
+                <h3>加载 M3U 链接</h3>
+                <button class="close-btn" data-action="closeModal" data-modal="urlModal">✕</button>
+            </div>
             <input type="text" id="urlInput" placeholder="https://example.com/playlist.m3u">
             <div class="modal-actions">
                 <button class="btn" data-action="closeModal" data-modal="urlModal">取消</button>
@@ -95,24 +106,27 @@
     </div>
 
     <!-- Settings Modal -->
-    <div class="modal" id="settingsModal">
-        <div class="modal-content settings-modal">
-            <h3>⚙️ 设置</h3>
+    <div class="modal" id="settingsModal" style="z-index: 1001;">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3>系统设置</h3>
+                <button class="close-btn" data-action="closeModal" data-modal="settingsModal">✕</button>
+            </div>
             
             <div class="settings-section">
-                <h4>扫描设置</h4>
+                <h4>扫描参数</h4>
                 <div class="form-group">
-                    <label>并发数 (1-100)</label>
+                    <label>并发线程数 (1-100)</label>
                     <input type="number" id="concurrencyInput" value="20" min="1" max="100">
                 </div>
                 <div class="form-group">
-                    <label>超时时间 (秒)</label>
+                    <label>请求超时时间 (秒)</label>
                     <input type="number" id="timeoutInput" value="15" min="5" max="120">
                 </div>
             </div>
 
             <div class="settings-section">
-                <h4>User-Agent</h4>
+                <h4>User-Agent 伪装</h4>
                 <div class="form-group">
                     <select id="uaPreset">
                         <option value="">默认 (Mozilla/5.0...)</option>
@@ -121,27 +135,27 @@
                         <option value="android">Android (Chrome)</option>
                         <option value="ios">iOS (Safari)</option>
                         <option value="windows">Windows (Chrome)</option>
-                        <option value="custom">自定义</option>
+                        <option value="custom">自定义输入...</option>
                     </select>
                 </div>
                 <div class="form-group" id="customUaGroup" style="display:none">
-                    <label>自定义 User-Agent</label>
-                    <textarea id="customUa" rows="3" placeholder="输入自定义 User-Agent"></textarea>
+                    <label>自定义 User-Agent 字符串</label>
+                    <textarea id="customUa" rows="3" placeholder="在此输入自定义 UA"></textarea>
                 </div>
             </div>
 
             <div class="modal-actions">
                 <button class="btn" data-action="closeModal" data-modal="settingsModal">取消</button>
-                <button class="btn primary" id="saveSettingsBtn">保存</button>
+                <button class="btn primary" id="saveSettingsBtn">保存设置</button>
             </div>
         </div>
     </div>
 
     <!-- Player Modal -->
     <div class="modal" id="playerModal">
-        <div class="modal-content player-modal">
+        <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
-                <h3>📺 选择播放器</h3>
+                <h3>选择外部播放器</h3>
                 <button class="close-btn" data-action="closeModal" data-modal="playerModal">✕</button>
             </div>
 
@@ -180,17 +194,16 @@
                 </button>
             </div>
 
-            <div class="player-section">
-                <h4>🌐 网页播放</h4>
-                <button class="btn primary full-width" data-action="playInBrowser">在浏览器中播放</button>
+            <div class="settings-section" style="margin-top:32px;">
+                <button class="btn primary full-width" data-action="playInBrowser">内置网页播放器播放</button>
             </div>
         </div>
     </div>
 
     <!-- Web Player Modal -->
     <div class="modal" id="webPlayerModal">
-        <div class="modal-content web-player-modal">
-            <div class="modal-header">
+        <div class="modal-content" style="max-width: 1000px; width: 95%; padding: 24px;">
+            <div class="modal-header" style="margin-bottom: 16px;">
                 <h3 id="playerTitle">正在播放</h3>
                 <button class="close-btn" data-action="closeWebPlayer">✕</button>
             </div>
@@ -204,24 +217,21 @@
 
     <!-- Stats Modal -->
     <div class="modal" id="statsModal">
-        <div class="modal-content stats-modal">
+        <div class="modal-content" style="max-width: 700px;">
             <div class="modal-header">
-                <h3>📊 扫描统计</h3>
+                <h3>统计与导出</h3>
                 <button class="close-btn" data-action="closeModal" data-modal="statsModal">✕</button>
             </div>
             <div id="statsContent">
                 <!-- Stats will be populated by JS -->
             </div>
-            <div class="stats-export-section">
-                <h4>导出结果</h4>
-                <div class="export-buttons">
-                    <button class="btn" data-action="exportFile" data-format="m3u">📺 M3U (仅可用)</button>
-                    <button class="btn" data-action="exportFile" data-format="json">📄 JSON (全部)</button>
-                    <button class="btn" data-action="exportFile" data-format="csv">📊 CSV (全部)</button>
+            <div class="settings-section" style="margin-top: 32px; padding-top: 32px; border-top: 1px solid var(--border);">
+                <h4>导出数据</h4>
+                <div style="display: flex; gap: 16px; margin-top: 20px;">
+                    <button class="btn primary" style="flex:1;" data-action="exportFile" data-format="m3u">导出 M3U (仅可用)</button>
+                    <button class="btn" style="flex:1;" data-action="exportFile" data-format="json">导出 JSON</button>
+                    <button class="btn" style="flex:1;" data-action="exportFile" data-format="csv">导出 CSV</button>
                 </div>
-            </div>
-            <div class="modal-actions">
-                <button class="btn primary" data-action="closeModal" data-modal="statsModal">关闭</button>
             </div>
         </div>
     </div>

@@ -546,10 +546,10 @@ async function renderDetail() {
 
     // Show single scan button for unscanned or failed channels
     if (!info || !info.available) {
-        const btnText = !info ? '🔍 扫描此频道' : '🔄 重新扫描';
+        const btnText = !info ? '<span class="btn-icon">⌕</span> 扫描此频道' : '<span class="btn-icon">⟳</span> 重新扫描';
         html += `<div class="action-buttons">
             <button class="btn primary action-btn" data-action="scanSingle" data-url="${escapedUrl}">${btnText}</button>
-            <button class="btn action-btn" data-action="copyUrl" data-url="${escapedUrl}">📋 复制URL</button>
+            <button class="btn action-btn" data-action="copyUrl" data-url="${escapedUrl}"><span class="btn-icon">⎘</span> 复制 URL</button>
         </div>`;
     }
 
@@ -681,82 +681,99 @@ function playInBrowser() {
     closeModal('playerModal');
     const title = selectedIndex >= 0 ? results[selectedIndex].channel.name : '正在播放';
     document.getElementById('playerTitle').textContent = title;
-    
+
     const video = document.getElementById('webPlayer');
     const isHls = currentStreamUrl.toLowerCase().includes('.m3u8');
-    
+
     // 先尝试直接播放，失败后走代理
     tryPlayDirect(video, currentStreamUrl, isHls);
     showModal('webPlayerModal');
 }
 
-// 尝试直接播放，失败后回退到代理
-function tryPlayDirect(video, url, isHls) {
-    let usedProxy = false;
-    
-    const playWithUrl = (streamUrl, viaProxy = false) => {
-        usedProxy = viaProxy;
-        
-        if (isHls && Hls.isSupported()) {
-            if (hls) {
+// Setup HLS.js player with error recovery
+function setupHlsPlayer(video, streamUrl, originalUrl, viaProxy) {
+    if (hls) {
+        hls.destroy();
+    }
+    hls = new Hls({
+        xhrSetup: function(xhr) {
+            xhr.withCredentials = false;
+        },
+        manifestLoadingTimeOut: 8000,
+        manifestLoadingMaxRetry: 1,
+        levelLoadingTimeOut: 8000,
+        levelLoadingMaxRetry: 1,
+        fragLoadingTimeOut: 10000,
+        fragLoadingMaxRetry: 1
+    });
+    hls.loadSource(streamUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, function() {
+        video.play().catch(e => console.log("Auto-play prevented:", e));
+    });
+    hls.on(Hls.Events.ERROR, function (event, data) {
+        if (data.fatal) {
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                if (!viaProxy) {
+                    console.log("Direct play network error, trying proxy...");
+                    hls.destroy();
+                    const proxyUrl = `/api/stream?url=${encodeURIComponent(originalUrl)}`;
+                    setupHlsPlayer(video, proxyUrl, originalUrl, true);
+                } else {
+                    console.log("Proxy also failed, trying direct as last resort...");
+                    hls.destroy();
+                    setupHlsPlayer(video, originalUrl, originalUrl, false);
+                }
+            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                console.log("Media error, trying to recover...");
+                hls.recoverMediaError();
+            } else {
+                console.log("Unrecoverable HLS error");
                 hls.destroy();
             }
-            hls = new Hls({
-                xhrSetup: function(xhr, url) {
-                    // 允许跨域
-                    xhr.withCredentials = false;
-                }
-            });
-            hls.loadSource(streamUrl);
-            hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                video.play().catch(e => console.log("Auto-play prevented:", e));
-            });
-            hls.on(Hls.Events.ERROR, function (event, data) {
-                if (data.fatal) {
-                    // 如果是网络错误且还没用代理，尝试代理
-                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !usedProxy) {
-                        console.log("Direct play failed, trying proxy...");
-                        hls.destroy();
-                        const proxyUrl = `/api/stream?url=${encodeURIComponent(url)}`;
-                        playWithUrl(proxyUrl, true);
-                    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                        console.log("Media error, try to recover");
-                        hls.recoverMediaError();
-                    } else {
-                        console.log("Cannot recover, destroy hls");
-                        hls.destroy();
-                    }
-                }
-            });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            // Native HLS support (Safari)
-            video.src = streamUrl;
-            video.onerror = () => {
-                if (!usedProxy) {
-                    console.log("Direct play failed, trying proxy...");
-                    const proxyUrl = `/api/stream?url=${encodeURIComponent(url)}`;
-                    playWithUrl(proxyUrl, true);
-                }
-            };
-            video.onloadedmetadata = () => {
-                video.play().catch(e => console.log("Auto-play prevented:", e));
-            };
-        } else {
-            // 普通视频格式，直接尝试
-            video.src = streamUrl;
-            video.onerror = () => {
-                if (!usedProxy) {
-                    console.log("Direct play failed, trying proxy...");
-                    const proxyUrl = `/api/stream?url=${encodeURIComponent(url)}`;
-                    playWithUrl(proxyUrl, true);
-                }
-            };
+        }
+    });
+}
+
+// Setup native HLS player (Safari)
+function setupNativePlayer(video, streamUrl, originalUrl, viaProxy) {
+    video.src = streamUrl;
+    video.onerror = () => {
+        if (!viaProxy) {
+            console.log("Direct play failed, trying proxy...");
+            const proxyUrl = `/api/stream?url=${encodeURIComponent(originalUrl)}`;
+            setupNativePlayer(video, proxyUrl, originalUrl, true);
         }
     };
-    
-    // 先尝试直接播放
-    playWithUrl(url, false);
+    video.onloadedmetadata = () => {
+        video.play().catch(e => console.log("Auto-play prevented:", e));
+    };
+}
+
+// Setup basic video player (non-HLS)
+function setupBasicPlayer(video, streamUrl, originalUrl, viaProxy) {
+    video.src = streamUrl;
+    video.onerror = () => {
+        if (!viaProxy) {
+            console.log("Direct play failed, trying proxy...");
+            const proxyUrl = `/api/stream?url=${encodeURIComponent(originalUrl)}`;
+            setupBasicPlayer(video, proxyUrl, originalUrl, true);
+        }
+    };
+    video.onloadedmetadata = () => {
+        video.play().catch(e => console.log("Auto-play prevented:", e));
+    };
+}
+
+// 尝试直接播放，失败后回退到代理
+function tryPlayDirect(video, url, isHls) {
+    if (isHls && Hls.isSupported()) {
+        setupHlsPlayer(video, url, url, false);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        setupNativePlayer(video, url, url, false);
+    } else {
+        setupBasicPlayer(video, url, url, false);
+    }
 }
 
 function stopWebPlayer() {
@@ -789,7 +806,9 @@ function showStatsModal() {
     results.forEach(r => {
         if (r.stream_info?.video_streams?.length > 0) {
             const v = r.stream_info.video_streams[0];
-            const resKey = `${v.width}x${v.height}`;
+            const fo = v.field_order?.toLowerCase() || '';
+            const isInterlaced = fo === 'tt' || fo === 'bb' || fo === 'tb' || fo === 'bt';
+            const resKey = isInterlaced ? `${v.width}x${v.height}i` : `${v.width}x${v.height}p`;
             resolutions[resKey] = (resolutions[resKey] || 0) + 1;
             
             if (v.codec) {

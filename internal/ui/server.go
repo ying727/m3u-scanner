@@ -566,7 +566,13 @@ func (s *Server) handleExportCSV(w http.ResponseWriter, r *http.Request) {
 
 			if len(info.VideoStreams) > 0 {
 				v := info.VideoStreams[0]
-				resolution = fmt.Sprintf("%dx%d", v.Width, v.Height)
+				fo := strings.ToLower(v.FieldOrder)
+				isInterlaced := fo == "tt" || fo == "bb" || fo == "tb" || fo == "bt"
+				if isInterlaced {
+					resolution = fmt.Sprintf("%dx%di", v.Width, v.Height)
+				} else {
+					resolution = fmt.Sprintf("%dx%dp", v.Width, v.Height)
+				}
 				codec = v.Codec
 				bitrate = fmt.Sprintf("%d", v.BitRate)
 			}
@@ -768,30 +774,185 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("GET", streamURL, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	// Use configured User-Agent, fallback to a common one
+	ua := s.settings.UserAgent
+	if ua == "" {
+		ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	resp, err := client.Do(req)
+	// Retry logic for transient failures
+	var resp *http.Response
+	var err error
+	maxRetries := 2
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		client := &http.Client{Timeout: 30 * time.Second}
+		req, reqErr := http.NewRequest("GET", streamURL, nil)
+		if reqErr != nil {
+			http.Error(w, reqErr.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		req.Header.Set("User-Agent", ua)
+		// Forward Referer to satisfy CDN restrictions
+		if ref := r.Header.Get("Referer"); ref != "" {
+			req.Header.Set("Referer", ref)
+		} else {
+			req.Header.Set("Referer", streamURL)
+		}
+
+		resp, err = client.Do(req)
+		if err == nil && resp.StatusCode < 500 {
+			break
+		}
+		if resp != nil {
+			resp.Body.Close()
+			resp = nil
+		}
+		if attempt < maxRetries {
+			time.Sleep(time.Duration(500*(attempt+1)) * time.Millisecond)
+		}
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	if resp == nil {
+		http.Error(w, "upstream returned error", http.StatusBadGateway)
+		return
+	}
 	defer resp.Body.Close()
 
-	for k, v := range resp.Header {
-		for _, vv := range v {
-			w.Header().Add(k, vv)
+	isM3U8 := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "mpegurl") ||
+		strings.HasSuffix(strings.ToLower(streamURL), ".m3u8")
+
+	if isM3U8 {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return
 		}
+		rewritten := rewriteM3U8Segments(string(body), streamURL)
+		
+		for k, v := range resp.Header {
+			if strings.ToLower(k) == "content-length" {
+				continue
+			}
+			for _, vv := range v {
+				w.Header().Add(k, vv)
+			}
+		}
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write([]byte(rewritten))
+	} else {
+		for k, v := range resp.Header {
+			for _, vv := range v {
+				w.Header().Add(k, vv)
+			}
+		}
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
+
+// rewriteM3U8Segments rewrites relative segment URLs in an m3u8 playlist
+// to use the /api/stream proxy, so the browser can fetch them without CORS issues.
+func rewriteM3U8Segments(content string, baseURL string) string {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return content
+	}
+	baseDir := parsed.Scheme + "://" + parsed.Host
+	if idx := strings.LastIndex(parsed.Path, "/"); idx >= 0 {
+		baseDir += parsed.Path[:idx+1]
 	}
 
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	resolveURL := func(raw string) string {
+		raw = strings.TrimSpace(raw)
+		raw = strings.Trim(raw, "\"'")
+		if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+			return "/api/stream?url=" + url.QueryEscape(raw)
+		}
+		return "/api/stream?url=" + url.QueryEscape(baseDir+raw)
+	}
+
+	var result strings.Builder
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			result.WriteString(line)
+			result.WriteString("\n")
+			continue
+		}
+
+		// Handle #EXT-X-KEY and similar directives with URI attributes
+		if strings.HasPrefix(trimmed, "#") && strings.Contains(trimmed, "URI=") {
+			rewritten := rewriteURIAttribute(trimmed, resolveURL)
+			result.WriteString(rewritten)
+			result.WriteString("\n")
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "#") {
+			result.WriteString(line)
+			result.WriteString("\n")
+			continue
+		}
+
+		// This is a URL line (segment or sub-playlist)
+		result.WriteString(resolveURL(trimmed))
+		result.WriteString("\n")
+	}
+	return result.String()
+}
+
+// rewriteURIAttribute rewrites URI="..." values in HLS directives like #EXT-X-KEY
+func rewriteURIAttribute(line string, resolveURL func(string) string) string {
+	idx := strings.Index(line, "URI=")
+	if idx < 0 {
+		return line
+	}
+
+	// Find the URI value (quoted or unquoted)
+	uriStart := idx + 4
+	if uriStart >= len(line) {
+		return line
+	}
+
+	quote := byte(0)
+	if line[uriStart] == '"' || line[uriStart] == '\'' {
+		quote = line[uriStart]
+		uriStart++
+	}
+
+	// Find end of URI value
+	uriEnd := uriStart
+	for uriEnd < len(line) {
+		if quote != 0 && line[uriEnd] == quote {
+			break
+		}
+		if quote == 0 && (line[uriEnd] == ',' || line[uriEnd] == ' ' || line[uriEnd] == '\n') {
+			break
+		}
+		uriEnd++
+	}
+
+	uriValue := line[uriStart:uriEnd]
+	proxied := resolveURL(uriValue)
+
+	// Reconstruct the line
+	var b strings.Builder
+	b.WriteString(line[:idx+4])
+	if quote != 0 {
+		b.WriteByte(quote)
+	}
+	b.WriteString(proxied)
+	if quote != 0 {
+		b.WriteByte(quote)
+	}
+	b.WriteString(line[uriEnd:])
+	return b.String()
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
