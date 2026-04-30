@@ -30,7 +30,7 @@
                 <button id="exportBtn" class="btn" disabled>💾 导出</button>
             </div>
             <div class="toolbar-right">
-                <button id="themeBtn" class="btn icon-btn" onclick="toggleTheme()">🌙</button>
+                <button id="themeBtn" class="btn icon-btn">🌙</button>
                 <button id="settingsBtn" class="btn icon-btn">⚙️ 设置</button>
             </div>
         </header>
@@ -39,10 +39,10 @@
             <div class="sidebar">
                 <div class="filter-bar">
                     <input type="text" id="filterInput" placeholder="搜索频道...">
-                    <select id="groupFilter" onchange="renderChannelList()">
+                    <select id="groupFilter">
                         <option value="">全部分组</option>
                     </select>
-                    <select id="resolutionFilter" onchange="renderChannelList()">
+                    <select id="resolutionFilter">
                         <option value="">全部分辨率</option>
                         <option value="4k">4K (2160p)</option>
                         <option value="1080p">1080p</option>
@@ -53,7 +53,7 @@
                         <option value="other">其他</option>
                         <option value="unscanned">未扫描</option>
                     </select>
-                    <select id="sortBy" onchange="renderChannelList()">
+                    <select id="sortBy">
                         <option value="default">默认排序</option>
                         <option value="name">按名称</option>
                         <option value="response">按响应速度</option>
@@ -88,7 +88,7 @@
             <h3>打开 M3U URL</h3>
             <input type="text" id="urlInput" placeholder="https://example.com/playlist.m3u">
             <div class="modal-actions">
-                <button class="btn" onclick="closeModal('urlModal')">取消</button>
+                <button class="btn" data-action="closeModal" data-modal="urlModal">取消</button>
                 <button class="btn primary" id="loadUrlBtn">加载</button>
             </div>
         </div>
@@ -114,7 +114,7 @@
             <div class="settings-section">
                 <h4>User-Agent</h4>
                 <div class="form-group">
-                    <select id="uaPreset" onchange="selectUserAgent()">
+                    <select id="uaPreset">
                         <option value="">默认 (Mozilla/5.0...)</option>
                         <option value="okhttp">okhttp/3.10.0</option>
                         <option value="okhttp-mod">okHttp/Mod-1.5.0.0</option>
@@ -131,7 +131,7 @@
             </div>
 
             <div class="modal-actions">
-                <button class="btn" onclick="closeModal('settingsModal')">取消</button>
+                <button class="btn" data-action="closeModal" data-modal="settingsModal">取消</button>
                 <button class="btn primary" id="saveSettingsBtn">保存</button>
             </div>
         </div>
@@ -142,39 +142,39 @@
         <div class="modal-content player-modal">
             <div class="modal-header">
                 <h3>📺 选择播放器</h3>
-                <button class="close-btn" onclick="closeModal('playerModal')">✕</button>
+                <button class="close-btn" data-action="closeModal" data-modal="playerModal">✕</button>
             </div>
-            
+
             <div class="player-grid">
-                <button class="player-btn" onclick="playWith('potplayer')">
+                <button class="player-btn" data-action="playWith" data-player="potplayer">
                     <div class="player-icon">🎬</div>
                     <div class="player-name">PotPlayer</div>
                 </button>
-                <button class="player-btn" onclick="playWith('vlc')">
+                <button class="player-btn" data-action="playWith" data-player="vlc">
                     <div class="player-icon">🎥</div>
                     <div class="player-name">VLC</div>
                 </button>
-                <button class="player-btn" onclick="playWith('mpv')">
+                <button class="player-btn" data-action="playWith" data-player="mpv">
                     <div class="player-icon">▶️</div>
                     <div class="player-name">MPV</div>
                 </button>
-                <button class="player-btn" onclick="playWith('iina')">
+                <button class="player-btn" data-action="playWith" data-player="iina">
                     <div class="player-icon">🎞️</div>
                     <div class="player-name">IINA</div>
                 </button>
-                <button class="player-btn" onclick="playWith('nplayer')">
+                <button class="player-btn" data-action="playWith" data-player="nplayer">
                     <div class="player-icon">📱</div>
                     <div class="player-name">nPlayer</div>
                 </button>
-                <button class="player-btn" onclick="playWith('infuse')">
+                <button class="player-btn" data-action="playWith" data-player="infuse">
                     <div class="player-icon">🎯</div>
                     <div class="player-name">Infuse</div>
                 </button>
-                <button class="player-btn" onclick="playWith('mxplayer')">
+                <button class="player-btn" data-action="playWith" data-player="mxplayer">
                     <div class="player-icon">📺</div>
                     <div class="player-name">MX Player</div>
                 </button>
-                <button class="player-btn" onclick="playWith('kodi')">
+                <button class="player-btn" data-action="playWith" data-player="kodi">
                     <div class="player-icon">🎮</div>
                     <div class="player-name">Kodi</div>
                 </button>
@@ -182,7 +182,7 @@
 
             <div class="player-section">
                 <h4>🌐 网页播放</h4>
-                <button class="btn primary full-width" onclick="playInBrowser()">在浏览器中播放</button>
+                <button class="btn primary full-width" data-action="playInBrowser">在浏览器中播放</button>
             </div>
         </div>
     </div>
@@ -192,7 +192,7 @@
         <div class="modal-content web-player-modal">
             <div class="modal-header">
                 <h3 id="playerTitle">正在播放</h3>
-                <button class="close-btn" onclick="closeModal('webPlayerModal'); stopWebPlayer()">✕</button>
+                <button class="close-btn" data-action="closeWebPlayer">✕</button>
             </div>
             <div class="web-player-container">
                 <video id="webPlayer" controls autoplay>
@@ -207,7 +207,7 @@
         <div class="modal-content stats-modal">
             <div class="modal-header">
                 <h3>📊 扫描统计</h3>
-                <button class="close-btn" onclick="closeModal('statsModal')">✕</button>
+                <button class="close-btn" data-action="closeModal" data-modal="statsModal">✕</button>
             </div>
             <div id="statsContent">
                 <!-- Stats will be populated by JS -->
@@ -215,13 +215,13 @@
             <div class="stats-export-section">
                 <h4>导出结果</h4>
                 <div class="export-buttons">
-                    <button class="btn" onclick="window.location.href='/api/export'">📺 M3U (仅可用)</button>
-                    <button class="btn" onclick="window.location.href='/api/export/json'">📄 JSON (全部)</button>
-                    <button class="btn" onclick="window.location.href='/api/export/csv'">📊 CSV (全部)</button>
+                    <button class="btn" data-action="exportFile" data-format="m3u">📺 M3U (仅可用)</button>
+                    <button class="btn" data-action="exportFile" data-format="json">📄 JSON (全部)</button>
+                    <button class="btn" data-action="exportFile" data-format="csv">📊 CSV (全部)</button>
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="btn primary" onclick="closeModal('statsModal')">关闭</button>
+                <button class="btn primary" data-action="closeModal" data-modal="statsModal">关闭</button>
             </div>
         </div>
     </div>

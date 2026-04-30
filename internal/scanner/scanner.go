@@ -62,7 +62,6 @@ func (s *Scanner) Scan(ctx context.Context, playlist *parser.M3UPlaylist,
 		return nil
 	}
 
-	// 初始化全局ffprobe并发控制（供 generateThumbnail 等使用）
 	ffprobe.InitConcurrency(s.concurrency)
 
 	var completed, available, failed int32
@@ -212,7 +211,7 @@ func (s *Scanner) ScanSync(ctx context.Context, playlist *parser.M3UPlaylist,
 
 	for result := range resultCh {
 		results.Results = append(results.Results, result)
-		if result.StreamInfo.Available {
+		if result.StreamInfo != nil && result.StreamInfo.Available {
 			results.Available++
 		} else {
 			results.Failed++

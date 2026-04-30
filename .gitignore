@@ -27,10 +27,10 @@ go.work.sum
 Thumbs.db
 
 # FFmpeg binaries (download separately)
-ffmpeg.exe
-ffprobe.exe
-ffmpeg
-ffprobe
+/ffmpeg.exe
+/ffprobe.exe
+/ffmpeg
+/ffprobe
 
 # Thumbnails cache
 thumbnails/

@@ -73,6 +73,12 @@ body {
     flex-wrap: wrap;
 }
 
+.toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .separator {
     width: 1px;
     height: 24px;
@@ -120,6 +126,12 @@ body {
 
 .btn.danger {
     background: var(--danger);
+}
+
+.icon-btn {
+    min-width: 38px;
+    padding: 8px 10px;
+    justify-content: center;
 }
 
 .btn.full-width {
@@ -907,6 +919,10 @@ body {
         justify-content: center;
     }
 
+    .toolbar-right {
+        justify-content: center;
+    }
+
     .content {
         flex-direction: column;
     }
@@ -941,4 +957,94 @@ body {
         flex: 1;
         min-width: 0;
     }
+}
+
+/* EPG Styles */
+.epg-current {
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 8px;
+}
+
+.epg-now-label {
+    font-size: 11px;
+    color: var(--success);
+    text-transform: uppercase;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.epg-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.epg-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.epg-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.epg-progress-bar {
+    height: 3px;
+    background: var(--bg-secondary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.epg-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s;
+}
+
+.epg-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.epg-item {
+    display: flex;
+    gap: 10px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.epg-item.epg-active {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+}
+
+.epg-item-time {
+    color: var(--text-muted);
+    min-width: 45px;
+    flex-shrink: 0;
+}
+
+.epg-item-title {
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.url-text {
+    word-break: break-all;
+    font-size: 12px;
+    font-family: monospace;
 }

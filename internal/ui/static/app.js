@@ -6,6 +6,10 @@ let scanning = false;
 let currentStreamUrl = '';
 let hls = null;
 let favorites = JSON.parse(localStorage.getItem('m3u-scanner-favorites') || '[]');
+let refreshTimer = null;
+let refreshInFlight = false;
+let refreshQueued = false;
+let detailRenderKey = '';
 
 // User Agents
 const userAgents = {
@@ -79,7 +83,7 @@ function init() {
     const evtSource = new EventSource('/api/events');
     evtSource.onmessage = (e) => {
         if (e.data === 'progress' || e.data === 'scan_complete') {
-            refreshResults();
+            scheduleRefresh();
         }
     };
 
@@ -92,9 +96,14 @@ function init() {
     exportBtn.addEventListener('click', exportResults);
     settingsBtn.addEventListener('click', () => showModal('settingsModal'));
     document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
+    document.getElementById('themeBtn').addEventListener('click', toggleTheme);
     filterInput.addEventListener('input', renderChannelList);
     showAvailable.addEventListener('change', renderChannelList);
     quickCheck.addEventListener('change', updateQuickCheck);
+    groupFilter.addEventListener('change', renderChannelList);
+    resolutionFilter.addEventListener('change', renderChannelList);
+    sortBy.addEventListener('change', renderChannelList);
+    document.getElementById('uaPreset').addEventListener('change', selectUserAgent);
 
     // Enter key for URL modal
     document.getElementById('urlInput').addEventListener('keypress', (e) => {
@@ -107,6 +116,12 @@ function init() {
             if (e.target === modal) closeModal(modal.id);
         });
     });
+
+    // Event delegation for data-action buttons (static + dynamic)
+    document.addEventListener('click', handleAction);
+
+    // Initial sync in case there are existing results on the server.
+    refreshResults();
 }
 
 function updateQuickCheck() {
@@ -120,6 +135,16 @@ function updateQuickCheck() {
                 body: JSON.stringify(settings)
             });
         });
+}
+
+function scheduleRefresh(delay = 120) {
+    if (refreshTimer) {
+        clearTimeout(refreshTimer);
+    }
+    refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        refreshResults();
+    }, delay);
 }
 
 async function handleFileUpload(e) {
@@ -194,6 +219,12 @@ async function stopScan() {
 }
 
 async function refreshResults() {
+    if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+    }
+    refreshInFlight = true;
+
     try {
         const res = await fetch('/api/results');
         const data = await res.json();
@@ -223,11 +254,24 @@ async function refreshResults() {
         }
 
         renderChannelList();
-        if (selectedIndex >= 0) {
-            renderDetail();
+        if (selectedIndex >= 0 && selectedIndex < results.length) {
+            const selected = results[selectedIndex];
+            const nextKey = selected
+                ? `${selected.channel.url}|${JSON.stringify(selected.stream_info || null)}`
+                : '';
+            if (nextKey !== detailRenderKey) {
+                detailRenderKey = nextKey;
+                renderDetail();
+            }
         }
     } catch (err) {
         console.error('刷新失败:', err);
+    } finally {
+        refreshInFlight = false;
+        if (refreshQueued) {
+            refreshQueued = false;
+            scheduleRefresh(80);
+        }
     }
 }
 
@@ -277,8 +321,8 @@ function renderChannelList() {
         const isFav = favorites.includes(r.channel.url);
         const hdrBadge = getHdrBadge(r);
         return `
-            <div class="channel-item ${isSelected ? 'selected' : ''}" 
-                 onclick="selectChannel(${r._index})" data-index="${r._index}">
+            <div class="channel-item ${isSelected ? 'selected' : ''}"
+                 data-action="selectChannel" data-index="${r._index}">
                 <div class="channel-status ${status}"></div>
                 <div class="channel-info">
                     <div class="channel-name">
@@ -304,9 +348,21 @@ function updateGroupFilter() {
     // 只在分组变化时更新
     const existingGroups = [...groupFilter.options].slice(1).map(o => o.value);
     if (JSON.stringify(groups) !== JSON.stringify(existingGroups)) {
-        groupFilter.innerHTML = '<option value="">全部分组</option>' + 
-            groups.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('');
-        groupFilter.value = currentVal;
+        groupFilter.innerHTML = '';
+
+        const allOption = document.createElement('option');
+        allOption.value = '';
+        allOption.textContent = '全部分组';
+        groupFilter.appendChild(allOption);
+
+        groups.forEach(groupName => {
+            const option = document.createElement('option');
+            option.value = groupName;
+            option.textContent = groupName;
+            groupFilter.appendChild(option);
+        });
+
+        groupFilter.value = groups.includes(currentVal) ? currentVal : '';
     }
 }
 
@@ -362,8 +418,10 @@ function selectChannel(index) {
     selectedIndex = index;
     if (index >= 0 && index < results.length) {
         selectedChannelUrl = results[index].channel.url;
+        detailRenderKey = '';
     } else {
         selectedChannelUrl = '';
+        detailRenderKey = '';
     }
     renderChannelList();
     renderDetail();
@@ -371,6 +429,7 @@ function selectChannel(index) {
 
 async function renderDetail() {
     if (selectedIndex < 0 || selectedIndex >= results.length) {
+        detailRenderKey = '';
         detailPanel.innerHTML = '<div class="empty-state"><p>选择一个频道查看详情</p></div>';
         return;
     }
@@ -378,6 +437,7 @@ async function renderDetail() {
     const r = results[selectedIndex];
     const ch = r.channel;
     const info = r.stream_info;
+    const escapedUrl = escapeHtml(ch.url);
 
     let html = '';
 
@@ -390,9 +450,9 @@ async function renderDetail() {
                 <div id="thumbnailLoading" class="thumbnail-loading">正在生成缩略图...</div>
             </div>
             <div class="action-buttons-vertical">
-                <button class="btn primary action-btn" onclick="showPlayerModal()">▶️ 播放</button>
-                <button class="btn action-btn" onclick="copyStreamUrl('${escapeHtml(ch.url)}')">📋 复制URL</button>
-                <button class="btn action-btn ${isFav ? 'fav-active' : ''}" onclick="toggleFavorite('${escapeHtml(ch.url)}')">${isFav ? '⭐ 已收藏' : '☆ 收藏'}</button>
+                <button class="btn primary action-btn" data-action="showPlayer">▶️ 播放</button>
+                <button class="btn action-btn" data-action="copyUrl" data-url="${escapedUrl}">📋 复制URL</button>
+                <button class="btn action-btn ${isFav ? 'fav-active' : ''}" data-action="toggleFav" data-url="${escapedUrl}">${isFav ? '⭐ 已收藏' : '☆ 收藏'}</button>
             </div>
         </div>`;
     }
@@ -402,11 +462,14 @@ async function renderDetail() {
             <h3>📺 频道信息</h3>
             <div class="detail-row"><span class="detail-label">名称</span><span class="detail-value">${escapeHtml(ch.name)}</span></div>
             <div class="detail-row"><span class="detail-label">分组</span><span class="detail-value">${escapeHtml(ch.group_title || '-')}</span></div>
-            <div class="detail-row"><span class="detail-label">URL</span><span class="detail-value">${escapeHtml(ch.url)}</span></div>
+            <div class="detail-row"><span class="detail-label">URL</span><span class="detail-value url-text">${escapedUrl}</span></div>
             ${ch.tvg_id ? `<div class="detail-row"><span class="detail-label">TVG ID</span><span class="detail-value">${escapeHtml(ch.tvg_id)}</span></div>` : ''}
-            ${ch.logo ? `<div class="detail-row"><span class="detail-label">Logo</span><span class="detail-value"><img src="${ch.logo}" style="max-height:50px;max-width:100px;"></span></div>` : ''}
+            ${ch.logo ? `<div class="detail-row"><span class="detail-label">Logo</span><span class="detail-value"><img src="${escapeHtml(ch.logo)}" style="max-height:50px;max-width:100px;" onerror="this.style.display='none'"></span></div>` : ''}
         </div>
     `;
+
+    // EPG section (loaded async)
+    html += `<div id="epgSection"></div>`;
 
     if (info) {
         html += `
@@ -425,8 +488,8 @@ async function renderDetail() {
             html += `
                 <div class="detail-section">
                     <h3>📦 格式</h3>
-                    <div class="detail-row"><span class="detail-label">容器</span><span class="detail-value">${info.format.name}</span></div>
-                    ${info.format.long_name ? `<div class="detail-row"><span class="detail-label">格式名称</span><span class="detail-value">${info.format.long_name}</span></div>` : ''}
+                    <div class="detail-row"><span class="detail-label">容器</span><span class="detail-value">${escapeHtml(info.format.name)}</span></div>
+                    ${info.format.long_name ? `<div class="detail-row"><span class="detail-label">格式名称</span><span class="detail-value">${escapeHtml(info.format.long_name)}</span></div>` : ''}
                     ${info.format.bit_rate > 0 ? `<div class="detail-row"><span class="detail-label">总码率</span><span class="detail-value">${Math.round(info.format.bit_rate / 1000)} kbps</span></div>` : ''}
                 </div>
             `;
@@ -435,26 +498,25 @@ async function renderDetail() {
         if (info.video_streams?.length > 0) {
             html += `<div class="detail-section"><h3>🎥 视频流</h3>`;
             info.video_streams.forEach((v, i) => {
-                // Determine scan type from field_order
                 const fo = v.field_order?.toLowerCase() || '';
                 const isInterlaced = fo === 'tt' || fo === 'bb' || fo === 'tb' || fo === 'bt';
                 const scanType = isInterlaced ? '隔行 (i)' : '逐行 (p)';
                 const scanBadge = isInterlaced ? '1080i' : (v.height >= 1080 ? '1080p' : '');
-                
+
                 html += `
                     <div class="stream-card">
                         <div class="stream-card-title">
                             视频流 #${i}
-                            <span class="stream-badge">${v.codec.toUpperCase()}</span>
-                            ${v.profile ? `<span class="stream-badge">${v.profile}</span>` : ''}
+                            <span class="stream-badge">${escapeHtml(v.codec).toUpperCase()}</span>
+                            ${v.profile ? `<span class="stream-badge">${escapeHtml(v.profile)}</span>` : ''}
                             ${v.height >= 1080 && scanBadge ? `<span class="stream-badge">${scanBadge}</span>` : ''}
-                            ${v.bit_rate_mode ? `<span class="stream-badge ${v.bit_rate_mode.toLowerCase()}">${v.bit_rate_mode}</span>` : ''}
+                            ${v.bit_rate_mode ? `<span class="stream-badge ${escapeHtml(v.bit_rate_mode).toLowerCase()}">${escapeHtml(v.bit_rate_mode)}</span>` : ''}
                         </div>
                         <div class="detail-row"><span class="detail-label">分辨率</span><span class="detail-value">${v.width}x${v.height}</span></div>
-                        <div class="detail-row"><span class="detail-label">扫描方式</span><span class="detail-value">${scanType}${v.field_order ? ` (${v.field_order})` : ''}</span></div>
+                        <div class="detail-row"><span class="detail-label">扫描方式</span><span class="detail-value">${scanType}${v.field_order ? ` (${escapeHtml(v.field_order)})` : ''}</span></div>
                         ${v.frame_rate > 0 ? `<div class="detail-row"><span class="detail-label">帧率</span><span class="detail-value">${v.frame_rate.toFixed(2)} fps</span></div>` : ''}
-                        ${v.bit_rate > 0 ? `<div class="detail-row"><span class="detail-label">码率</span><span class="detail-value">${formatBitrate(v.bit_rate)}${v.bit_rate_mode ? ` (${v.bit_rate_mode})` : ''}</span></div>` : ''}
-                        ${v.pixel_format ? `<div class="detail-row"><span class="detail-label">像素格式</span><span class="detail-value">${v.pixel_format}</span></div>` : ''}
+                        ${v.bit_rate > 0 ? `<div class="detail-row"><span class="detail-label">码率</span><span class="detail-value">${formatBitrate(v.bit_rate)}${v.bit_rate_mode ? ` (${escapeHtml(v.bit_rate_mode)})` : ''}</span></div>` : ''}
+                        ${v.pixel_format ? `<div class="detail-row"><span class="detail-label">像素格式</span><span class="detail-value">${escapeHtml(v.pixel_format)}</span></div>` : ''}
                     </div>
                 `;
             });
@@ -468,13 +530,13 @@ async function renderDetail() {
                     <div class="stream-card">
                         <div class="stream-card-title">
                             音频流 #${i}
-                            <span class="stream-badge">${a.codec.toUpperCase()}</span>
-                            ${a.language ? `<span class="stream-badge">${a.language}</span>` : ''}
-                            ${a.bit_rate_mode ? `<span class="stream-badge ${a.bit_rate_mode.toLowerCase()}">${a.bit_rate_mode}</span>` : ''}
+                            <span class="stream-badge">${escapeHtml(a.codec).toUpperCase()}</span>
+                            ${a.language ? `<span class="stream-badge">${escapeHtml(a.language)}</span>` : ''}
+                            ${a.bit_rate_mode ? `<span class="stream-badge ${escapeHtml(a.bit_rate_mode).toLowerCase()}">${escapeHtml(a.bit_rate_mode)}</span>` : ''}
                         </div>
-                        <div class="detail-row"><span class="detail-label">声道</span><span class="detail-value">${a.channels}${a.channel_layout ? ` (${a.channel_layout})` : ''}</span></div>
+                        <div class="detail-row"><span class="detail-label">声道</span><span class="detail-value">${a.channels}${a.channel_layout ? ` (${escapeHtml(a.channel_layout)})` : ''}</span></div>
                         ${a.sample_rate > 0 ? `<div class="detail-row"><span class="detail-label">采样率</span><span class="detail-value">${a.sample_rate} Hz</span></div>` : ''}
-                        ${a.bit_rate > 0 ? `<div class="detail-row"><span class="detail-label">码率</span><span class="detail-value">${formatBitrate(a.bit_rate)}${a.bit_rate_mode ? ` (${a.bit_rate_mode})` : ''}</span></div>` : ''}
+                        ${a.bit_rate > 0 ? `<div class="detail-row"><span class="detail-label">码率</span><span class="detail-value">${formatBitrate(a.bit_rate)}${a.bit_rate_mode ? ` (${escapeHtml(a.bit_rate_mode)})` : ''}</span></div>` : ''}
                     </div>
                 `;
             });
@@ -486,8 +548,8 @@ async function renderDetail() {
     if (!info || !info.available) {
         const btnText = !info ? '🔍 扫描此频道' : '🔄 重新扫描';
         html += `<div class="action-buttons">
-            <button class="btn primary action-btn" onclick="scanSingleChannel('${escapeHtml(ch.url)}')">${btnText}</button>
-            <button class="btn action-btn" onclick="copyStreamUrl('${escapeHtml(ch.url)}')">📋 复制URL</button>
+            <button class="btn primary action-btn" data-action="scanSingle" data-url="${escapedUrl}">${btnText}</button>
+            <button class="btn action-btn" data-action="copyUrl" data-url="${escapedUrl}">📋 复制URL</button>
         </div>`;
     }
 
@@ -496,6 +558,11 @@ async function renderDetail() {
     // Load thumbnail asynchronously
     if (info && info.available) {
         loadThumbnail(ch.url);
+    }
+
+    // Load EPG data
+    if (ch.tvg_id) {
+        loadEPG(ch.tvg_id);
     }
 }
 
@@ -519,6 +586,59 @@ async function loadThumbnail(url) {
             loading.style.color = 'var(--danger)';
         }
     }
+}
+
+async function loadEPG(channelId) {
+    const section = document.getElementById('epgSection');
+    if (!section) return;
+
+    try {
+        const res = await fetch(`/api/epg?channel_id=${encodeURIComponent(channelId)}`);
+        const data = await res.json();
+        if (!data.available || !data.channel) return;
+
+        let html = `<div class="detail-section"><h3>📅 节目表</h3>`;
+
+        if (data.current) {
+            const now = new Date();
+            const start = new Date(data.current.start);
+            const stop = new Date(data.current.stop);
+            const progress = Math.min(100, Math.max(0, ((now - start) / (stop - start)) * 100));
+            html += `<div class="epg-current">
+                <div class="epg-now-label">正在播出</div>
+                <div class="epg-title">${escapeHtml(data.current.title)}</div>
+                ${data.current.description ? `<div class="epg-desc">${escapeHtml(data.current.description)}</div>` : ''}
+                <div class="epg-time">${formatTime(start)} - ${formatTime(stop)}</div>
+                <div class="epg-progress-bar"><div class="epg-progress-fill" style="width:${progress}%"></div></div>
+            </div>`;
+        }
+
+        if (data.channel.programmes?.length > 0) {
+            html += `<div class="epg-list">`;
+            const now = new Date();
+            const upcoming = data.channel.programmes
+                .filter(p => new Date(p.stop) > now)
+                .slice(0, 8);
+            upcoming.forEach(p => {
+                const start = new Date(p.start);
+                const isCurrent = new Date(p.start) <= now && new Date(p.stop) > now;
+                html += `<div class="epg-item ${isCurrent ? 'epg-active' : ''}">
+                    <span class="epg-item-time">${formatTime(start)}</span>
+                    <span class="epg-item-title">${escapeHtml(p.title)}</span>
+                </div>`;
+            });
+            html += `</div>`;
+        }
+
+        html += `</div>`;
+        section.innerHTML = html;
+    } catch (err) {
+        // EPG not available, silently ignore
+    }
+}
+
+function formatTime(d) {
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
 async function scanSingleChannel(url) {
@@ -660,6 +780,7 @@ function showStatsModal() {
     const available = results.filter(r => r.stream_info?.available).length;
     const failed = results.filter(r => r.stream_info && !r.stream_info.available).length;
     const unscanned = total - scanned;
+    const safeAvailable = Math.max(available, 1);
 
     // Resolution distribution
     const resolutions = {};
@@ -713,7 +834,7 @@ function showStatsModal() {
             <h4>分辨率分布</h4>
             <div class="stats-bars">
                 ${sortedRes.map(([res, count]) => {
-                    const pct = (count / available * 100).toFixed(1);
+                    const pct = (count / safeAvailable * 100).toFixed(1);
                     return `<div class="stats-bar-row">
                         <span class="stats-bar-label">${res}</span>
                         <div class="stats-bar-container">
@@ -731,7 +852,7 @@ function showStatsModal() {
             <h4>视频编码分布</h4>
             <div class="stats-bars">
                 ${sortedCodecs.map(([codec, count]) => {
-                    const pct = (count / available * 100).toFixed(1);
+                    const pct = (count / safeAvailable * 100).toFixed(1);
                     return `<div class="stats-bar-row">
                         <span class="stats-bar-label">${codec}</span>
                         <div class="stats-bar-container">
@@ -798,7 +919,58 @@ function closeModal(id) {
 
 function escapeHtml(str) {
     if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// Event delegation handler for all data-action buttons
+function handleAction(e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+
+    switch (action) {
+        case 'closeModal':
+            closeModal(btn.dataset.modal);
+            break;
+        case 'closeWebPlayer':
+            closeModal('webPlayerModal');
+            stopWebPlayer();
+            break;
+        case 'playWith':
+            playWith(btn.dataset.player);
+            break;
+        case 'playInBrowser':
+            playInBrowser();
+            break;
+        case 'exportFile':
+            exportFile(btn.dataset.format);
+            break;
+        case 'copyUrl':
+            copyStreamUrl(btn.dataset.url);
+            break;
+        case 'toggleFav':
+            toggleFavorite(btn.dataset.url);
+            break;
+        case 'scanSingle':
+            scanSingleChannel(btn.dataset.url);
+            break;
+        case 'showPlayer':
+            showPlayerModal();
+            break;
+        case 'selectChannel':
+            selectChannel(parseInt(btn.dataset.index));
+            break;
+    }
+}
+
+function exportFile(format) {
+    const urls = { m3u: '/api/export', json: '/api/export/json', csv: '/api/export/csv' };
+    window.location.href = urls[format] || '/api/export';
 }
 
 // 格式化码率显示
