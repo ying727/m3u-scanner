@@ -45,8 +45,11 @@ type Server struct {
 	clients      map[chan string]bool
 	clientsMutex sync.Mutex
 
-	settings      Settings
-	settingsPath  string
+	settings     Settings
+	settingsPath string
+
+	resultsPath  string
+	lastScanTime time.Time
 
 	thumbnails map[string]string // URL -> base64 thumbnail
 	thumbMutex sync.RWMutex
@@ -63,6 +66,16 @@ type Settings struct {
 	UserAgent   string `json:"userAgent"`
 }
 
+// PersistedScanData holds scan results for disk persistence
+type PersistedScanData struct {
+	Results   []scanner.ScanResult `json:"results"`
+	StartTime time.Time            `json:"start_time"`
+	EndTime   time.Time            `json:"end_time"`
+	Total     int                  `json:"total"`
+	Available int                  `json:"available"`
+	Failed    int                  `json:"failed"`
+}
+
 // NewServer creates a new web UI server
 func NewServer() *Server {
 	thumbDir := filepath.Join(os.TempDir(), "m3u-scanner-thumbnails")
@@ -75,10 +88,12 @@ func NewServer() *Server {
 		clients:      make(map[chan string]bool),
 		settings:     Settings{Concurrency: 20, Timeout: 15, QuickCheck: false},
 		settingsPath: settingsPath,
+		resultsPath:  filepath.Join(configDir(), "scan_results.json"),
 		thumbnails:   make(map[string]string),
 		thumbDir:     thumbDir,
 	}
 	s.loadSettings()
+	s.loadResults()
 	return s
 }
 
@@ -112,6 +127,53 @@ func (s *Server) saveSettings() {
 	_ = os.WriteFile(s.settingsPath, data, 0644)
 }
 
+func (s *Server) saveResults() {
+	s.resultsMutex.RLock()
+	persisted := PersistedScanData{
+		Results:   s.results,
+		StartTime: s.lastScanTime,
+		EndTime:   time.Now(),
+	}
+	for _, r := range s.results {
+		if r.StreamInfo != nil {
+			if r.StreamInfo.Available {
+				persisted.Available++
+			} else if r.StreamInfo.Error != "" {
+				persisted.Failed++
+			}
+		}
+	}
+	persisted.Total = len(s.results)
+	s.resultsMutex.RUnlock()
+
+	jsonData, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(s.resultsPath), 0755)
+	_ = os.WriteFile(s.resultsPath, jsonData, 0644)
+}
+
+func (s *Server) loadResults() {
+	data, err := os.ReadFile(s.resultsPath)
+	if err != nil {
+		return
+	}
+	var loaded PersistedScanData
+	if json.Unmarshal(data, &loaded) != nil || len(loaded.Results) == 0 {
+		return
+	}
+
+	s.resultsMutex.Lock()
+	s.results = loaded.Results
+	s.resultIndex = make(map[string]int, len(loaded.Results))
+	for i, r := range loaded.Results {
+		s.resultIndex[r.Channel.URL] = i
+	}
+	s.lastScanTime = loaded.EndTime
+	s.resultsMutex.Unlock()
+}
+
 // Run starts the web server
 func (s *Server) Run(port int) error {
 	mux := http.NewServeMux()
@@ -132,6 +194,8 @@ func (s *Server) Run(port int) error {
 	mux.HandleFunc("/api/thumbnail", s.handleThumbnail)
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/scan/single", s.handleScanSingle)
+	mux.HandleFunc("/api/scan/failed", s.handleScanFailed)
+	mux.HandleFunc("/api/results/clear", s.handleClearResults)
 	mux.HandleFunc("/api/epg", s.handleEPG)
 
 	// Static files
@@ -413,6 +477,11 @@ func (s *Server) runScan(ctx context.Context, playlist *parser.M3UPlaylist) {
 	if err := <-errCh; err != nil && err != context.Canceled {
 		log.Printf("scan error: %v", err)
 	}
+
+	s.resultsMutex.Lock()
+	s.lastScanTime = time.Now()
+	s.resultsMutex.Unlock()
+	s.saveResults()
 }
 
 func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
@@ -462,6 +531,7 @@ func (s *Server) handleScanSingle(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			streamInfo.Error = err.Error()
+			streamInfo.ErrorType = ffprobe.ClassifyError(err)
 		}
 	} else {
 		streamInfo = ffprobe.Probe(req.URL, time.Duration(timeout)*time.Second)
@@ -474,6 +544,7 @@ func (s *Server) handleScanSingle(w http.ResponseWriter, r *http.Request) {
 	}
 	s.resultsMutex.Unlock()
 
+	s.saveResults()
 	s.broadcast("progress")
 	jsonResponse(w, map[string]interface{}{
 		"success":     true,
@@ -481,10 +552,75 @@ func (s *Server) handleScanSingle(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleScanFailed(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.scanMutex.Lock()
+	if s.scanning {
+		s.scanMutex.Unlock()
+		jsonError(w, "扫描正在进行中", http.StatusBadRequest)
+		return
+	}
+
+	s.resultsMutex.RLock()
+	playlist := s.playlist
+	var channels []parser.Channel
+	for _, result := range s.results {
+		if result.StreamInfo == nil || !result.StreamInfo.Available {
+			channels = append(channels, result.Channel)
+		}
+	}
+	s.resultsMutex.RUnlock()
+
+	if playlist == nil {
+		s.scanMutex.Unlock()
+		jsonError(w, "未加载播放列表", http.StatusBadRequest)
+		return
+	}
+	if len(channels) == 0 {
+		s.scanMutex.Unlock()
+		jsonResponse(w, map[string]interface{}{"success": true, "count": 0})
+		return
+	}
+
+	filteredPlaylist := &parser.M3UPlaylist{
+		Channels: channels,
+		EPGUrl:   playlist.EPGUrl,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancelFunc = cancel
+	s.scanning = true
+	s.scanMutex.Unlock()
+
+	go s.runScan(ctx, filteredPlaylist)
+	jsonResponse(w, map[string]interface{}{"success": true, "count": len(channels)})
+}
+
+func (s *Server) handleClearResults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.resultsMutex.Lock()
+	s.results = make([]scanner.ScanResult, 0)
+	s.resultIndex = make(map[string]int)
+	s.lastScanTime = time.Time{}
+	s.resultsMutex.Unlock()
+
+	_ = os.Remove(s.resultsPath)
+	s.broadcast("progress")
+	jsonResponse(w, map[string]bool{"success": true})
+}
+
 func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	s.resultsMutex.RLock()
 	results := append([]scanner.ScanResult(nil), s.results...)
 	progress := s.progress
+	lastScanTime := s.lastScanTime
 	s.resultsMutex.RUnlock()
 
 	s.scanMutex.Lock()
@@ -492,9 +628,10 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	s.scanMutex.Unlock()
 
 	jsonResponse(w, map[string]interface{}{
-		"results":  results,
-		"progress": progress,
-		"scanning": scanning,
+		"results":      results,
+		"progress":     progress,
+		"scanning":     scanning,
+		"lastScanTime": lastScanTime,
 	})
 }
 
@@ -831,7 +968,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rewritten := rewriteM3U8Segments(string(body), streamURL)
-		
+
 		for k, v := range resp.Header {
 			if strings.ToLower(k) == "content-length" {
 				continue

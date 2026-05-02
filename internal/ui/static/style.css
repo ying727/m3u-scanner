@@ -593,3 +593,10 @@ textarea { font-family: var(--font-mono); resize: vertical; }
 .epg-item-title { color: var(--text-secondary); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .url-text { color: var(--text-secondary); opacity: 0.8; }
+
+/* Staleness indicator */
+.staleness-indicator {
+    font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);
+    margin-left: 12px; white-space: nowrap;
+}
+.staleness-indicator.stale { color: var(--warning); }

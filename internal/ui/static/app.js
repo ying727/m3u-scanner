@@ -21,11 +21,23 @@ const userAgents = {
     'windows': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
 
+const errorTypeLabels = {
+    'timeout': '请求超时',
+    'connection_refused': '连接被拒绝',
+    'not_found': '未找到 (404)',
+    'forbidden': '禁止访问 (403)',
+    'dns_error': 'DNS解析失败',
+    'network_error': '网络错误',
+    'decode_error': '解码失败',
+    'unknown': '未知错误'
+};
+
 // Elements
 const fileInput = document.getElementById('fileInput');
 const urlBtn = document.getElementById('urlBtn');
 const scanBtn = document.getElementById('scanBtn');
 const stopBtn = document.getElementById('stopBtn');
+const rescanFailedBtn = document.getElementById('rescanFailedBtn');
 const exportBtn = document.getElementById('exportBtn');
 const settingsBtn = document.getElementById('settingsBtn');
 const filterInput = document.getElementById('filterInput');
@@ -93,6 +105,7 @@ function init() {
     document.getElementById('loadUrlBtn').addEventListener('click', handleLoadURL);
     scanBtn.addEventListener('click', startScan);
     stopBtn.addEventListener('click', stopScan);
+    rescanFailedBtn.addEventListener('click', rescanFailed);
     exportBtn.addEventListener('click', exportResults);
     settingsBtn.addEventListener('click', () => showModal('settingsModal'));
     document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
@@ -199,6 +212,7 @@ async function startScan() {
         if (data.error) throw new Error(data.error);
         scanning = true;
         scanBtn.disabled = true;
+        rescanFailedBtn.disabled = true;
         stopBtn.disabled = false;
         exportBtn.disabled = true;
         progressContainer.style.display = 'block';
@@ -215,6 +229,27 @@ async function stopScan() {
         statusText.textContent = '已停止扫描';
     } catch (err) {
         statusText.textContent = '停止失败: ' + err.message;
+    }
+}
+
+async function rescanFailed() {
+    try {
+        const res = await fetch('/api/scan/failed', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        if (data.count === 0) {
+            showToast('没有需要重新扫描的频道');
+            return;
+        }
+        scanning = true;
+        scanBtn.disabled = true;
+        rescanFailedBtn.disabled = true;
+        stopBtn.disabled = false;
+        exportBtn.disabled = true;
+        progressContainer.style.display = 'block';
+        statusText.textContent = `重新扫描 ${data.count} 个失败频道...`;
+    } catch (err) {
+        statusText.textContent = '错误: ' + err.message;
     }
 }
 
@@ -247,11 +282,14 @@ async function refreshResults() {
         if (!scanning && data.progress && data.progress.completed > 0) {
             progressContainer.style.display = 'none';
             scanBtn.disabled = false;
+            rescanFailedBtn.disabled = false;
             stopBtn.disabled = true;
             exportBtn.disabled = false;
             const available = results.filter(r => r.stream_info?.available).length;
             statusText.textContent = `完成: ${available}/${results.length} 可用`;
         }
+
+        updateStalenessIndicator(data.lastScanTime);
 
         renderChannelList();
         if (selectedIndex >= 0 && selectedIndex < results.length) {
@@ -411,6 +449,9 @@ function getMeta(r) {
     if (r.stream_info.available) {
         return `${Math.round(r.stream_info.response_time / 1000000)}ms`;
     }
+    if (r.stream_info.error_type && errorTypeLabels[r.stream_info.error_type]) {
+        return errorTypeLabels[r.stream_info.error_type];
+    }
     return '不可用';
 }
 
@@ -480,7 +521,8 @@ async function renderDetail() {
                     <span class="detail-value ${info.available ? 'success' : 'danger'}">${info.available ? '✓ 可用' : '✗ 不可用'}</span>
                 </div>
                 <div class="detail-row"><span class="detail-label">响应时间</span><span class="detail-value">${Math.round(info.response_time / 1000000)}ms</span></div>
-                ${info.error ? `<div class="detail-row"><span class="detail-label">错误</span><span class="detail-value danger">${escapeHtml(info.error)}</span></div>` : ''}
+                ${info.error_type ? `<div class="detail-row"><span class="detail-label">错误</span><span class="detail-value danger">${escapeHtml(errorTypeLabels[info.error_type] || info.error_type)}</span></div>` :
+                info.error ? `<div class="detail-row"><span class="detail-label">错误</span><span class="detail-value danger">${escapeHtml(info.error)}</span></div>` : ''}
             </div>
         `;
 
@@ -1072,6 +1114,38 @@ function getHdrBadge(r) {
     }
     
     return badges.join('');
+}
+
+function updateStalenessIndicator(lastScanTime) {
+    const el = document.getElementById('stalenessIndicator');
+    if (!el) return;
+
+    if (!lastScanTime || lastScanTime === '0001-01-01T00:00:00Z') {
+        el.textContent = '';
+        el.className = 'staleness-indicator';
+        return;
+    }
+
+    const scanDate = new Date(lastScanTime);
+    const now = new Date();
+    const diffMs = now - scanDate;
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    let text;
+    if (diffMin < 1) {
+        text = '刚刚扫描';
+    } else if (diffMin < 60) {
+        text = `${diffMin}分钟前扫描`;
+    } else if (diffHours < 24) {
+        text = `${diffHours}小时前扫描`;
+    } else {
+        text = `${diffDays}天前扫描`;
+    }
+
+    el.textContent = text;
+    el.className = 'staleness-indicator' + (diffHours >= 24 ? ' stale' : '');
 }
 
 function initTheme() {

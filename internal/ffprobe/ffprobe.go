@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -115,6 +116,7 @@ type StreamInfo struct {
 	Available    bool          `json:"available"`
 	ResponseTime time.Duration `json:"response_time"`
 	Error        string        `json:"error,omitempty"`
+	ErrorType    string        `json:"error_type,omitempty"`
 	Format       *FormatInfo   `json:"format,omitempty"`
 	VideoStreams []VideoStream `json:"video_streams,omitempty"`
 	AudioStreams []AudioStream `json:"audio_streams,omitempty"`
@@ -242,8 +244,10 @@ func Probe(url string, timeout time.Duration) *StreamInfo {
 		info.Available = false
 		if ctx.Err() == context.DeadlineExceeded {
 			info.Error = "timeout"
+			info.ErrorType = "timeout"
 		} else {
 			info.Error = err.Error()
+			info.ErrorType = ClassifyError(err)
 		}
 		return info
 	}
@@ -252,6 +256,7 @@ func Probe(url string, timeout time.Duration) *StreamInfo {
 	if err := json.Unmarshal(output, &probeOutput); err != nil {
 		info.Available = false
 		info.Error = "failed to parse ffprobe output"
+		info.ErrorType = "decode_error"
 		return info
 	}
 
@@ -385,6 +390,39 @@ func CheckAvailability(url string, timeout time.Duration) (bool, time.Duration, 
 	}
 
 	return err == nil, elapsed, err
+}
+
+// ClassifyError categorizes an error into a stable type string
+func ClassifyError(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "timeout") || strings.Contains(s, "deadline exceeded") {
+		return "timeout"
+	}
+	if strings.Contains(s, "connection refused") {
+		return "connection_refused"
+	}
+	if strings.Contains(s, "404") || strings.Contains(s, "not found") {
+		return "not_found"
+	}
+	if strings.Contains(s, "403") || strings.Contains(s, "forbidden") {
+		return "forbidden"
+	}
+	if strings.Contains(s, "no such host") || strings.Contains(s, "dns") ||
+		strings.Contains(s, "name resolution") || strings.Contains(s, "lookup") {
+		return "dns_error"
+	}
+	if strings.Contains(s, "network") || strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "eof") || strings.Contains(s, "broken pipe") {
+		return "network_error"
+	}
+	if strings.Contains(s, "invalid data") || strings.Contains(s, "decode") ||
+		strings.Contains(s, "corrupt") {
+		return "decode_error"
+	}
+	return "unknown"
 }
 
 func parseFormat(f ffprobeFormat) *FormatInfo {

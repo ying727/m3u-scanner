@@ -21,6 +21,7 @@
                 <div class="separator"></div>
                 <button id="scanBtn" class="btn primary" disabled>开始扫描</button>
                 <button id="stopBtn" class="btn danger" disabled>停止</button>
+                <button id="rescanFailedBtn" class="btn" disabled>重扫失败</button>
                 <div class="separator"></div>
                 <label class="checkbox">
                     <input type="checkbox" id="quickCheck">
@@ -82,6 +83,7 @@
         <footer class="statusbar">
             <div style="display: flex; align-items: center;">
                 <span id="statusText">系统就绪</span>
+                <span id="stalenessIndicator" class="staleness-indicator"></span>
                 <div class="progress-container" id="progressContainer" style="display:none">
                     <div class="progress-bar" id="progressBar"></div>
                 </div>
