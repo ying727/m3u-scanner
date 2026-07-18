@@ -28,9 +28,36 @@ type M3UPlaylist struct {
 	EPGUrl   string    `json:"epg_url"`
 }
 
+// DeduplicateChannels removes duplicate streams from the playlist, keeping the first occurrence
+func (p *M3UPlaylist) DeduplicateChannels() int {
+	if p == nil || len(p.Channels) == 0 {
+		return 0
+	}
+
+	seen := make(map[string]bool)
+	uniqueChannels := make([]Channel, 0, len(p.Channels))
+	duplicates := 0
+
+	for _, ch := range p.Channels {
+		// Normalize URL to handle trailing slashes or basic differences
+		urlKey := strings.TrimSpace(ch.URL)
+
+		if !seen[urlKey] {
+			seen[urlKey] = true
+			uniqueChannels = append(uniqueChannels, ch)
+		} else {
+			duplicates++
+		}
+	}
+
+	p.Channels = uniqueChannels
+	return duplicates
+}
+
 var (
 	extinfDurRegex = regexp.MustCompile(`#EXTINF:(-?\d+)\s*(.*)`)
 	attrRegex      = regexp.MustCompile(`(\w+(?:-\w+)*)="([^"]*)"`)
+	bareAttrRegex  = regexp.MustCompile(`(?:^|\s)(\w+(?:-\w+)*)=([^\s"]+)`)
 )
 
 // ParseFile parses an M3U file from a local path
@@ -68,7 +95,8 @@ func ParseURLWithUA(url, userAgent string) (*M3UPlaylist, error) {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
-	return parse(resp.Body)
+	// Bound remote input to prevent an unexpectedly large response exhausting memory.
+	return parse(io.LimitReader(resp.Body, 100<<20))
 }
 
 func parse(reader io.Reader) (*M3UPlaylist, error) {
@@ -175,6 +203,14 @@ func parseAttributes(line string) map[string]string {
 	for _, match := range matches {
 		if len(match) >= 3 {
 			attrs[strings.ToLower(match[1])] = match[2]
+		}
+	}
+	for _, match := range bareAttrRegex.FindAllStringSubmatch(line, -1) {
+		if len(match) >= 3 {
+			key := strings.ToLower(match[1])
+			if _, exists := attrs[key]; !exists {
+				attrs[key] = match[2]
+			}
 		}
 	}
 	return attrs

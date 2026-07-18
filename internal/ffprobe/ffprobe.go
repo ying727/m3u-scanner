@@ -80,8 +80,8 @@ func getFFprobePath() string {
 		if runtime.GOOS == "windows" {
 			name = "ffprobe.exe"
 		}
-
-		// Check same directory as executable
+		// Check beside the executable first. Release packages should keep
+		// ffprobe next to the scanner binary.
 		if exePath, err := os.Executable(); err == nil {
 			localPath := filepath.Join(filepath.Dir(exePath), name)
 			if _, err := os.Stat(localPath); err == nil {
@@ -120,6 +120,7 @@ type StreamInfo struct {
 	Format       *FormatInfo   `json:"format,omitempty"`
 	VideoStreams []VideoStream `json:"video_streams,omitempty"`
 	AudioStreams []AudioStream `json:"audio_streams,omitempty"`
+	UsedFallback string        `json:"used_fallback,omitempty"` // User-Agent used if retry was successful
 }
 
 // FormatInfo contains container format information
@@ -214,6 +215,11 @@ type ffprobePacket struct {
 
 // Probe analyzes a stream URL and returns detailed information
 func Probe(url string, timeout time.Duration) *StreamInfo {
+	return ProbeWithUA(url, timeout, "")
+}
+
+// ProbeWithUA analyzes a stream URL and returns detailed information, with an optional user agent
+func ProbeWithUA(url string, timeout time.Duration, userAgent string) *StreamInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -226,16 +232,22 @@ func Probe(url string, timeout time.Duration) *StreamInfo {
 	start := time.Now()
 	info := &StreamInfo{}
 
-	// 第一步：获取基本流信息
-	cmd := exec.CommandContext(ctx, getFFprobePath(),
+	args := []string{
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
 		"-analyzeduration", "3000000",
 		"-probesize", "3000000",
-		url,
-	)
+	}
+
+	if userAgent != "" {
+		args = append(args, "-user_agent", userAgent)
+	}
+	args = append(args, url)
+
+	// 第一步：获取基本流信息
+	cmd := exec.CommandContext(ctx, getFFprobePath(), args...)
 
 	output, err := cmd.Output()
 	info.ResponseTime = time.Since(start)
@@ -266,24 +278,46 @@ func Probe(url string, timeout time.Duration) *StreamInfo {
 
 	// 第二步：通过采样packets计算码率和判断CBR/VBR模式
 	if ctx.Err() == nil {
-		calcBitrateFromPackets(ctx, url, info)
+		calcBitrateFromPacketsWithUA(ctx, url, info, userAgent)
 	}
 
 	return info
 }
 
-// calcBitrateFromPackets 通过采样packets计算码率
-// 调用者 Probe() 已持有信号量，此处不再获取
-func calcBitrateFromPackets(ctx context.Context, url string, info *StreamInfo) {
-	// 使用 -show_entries 只获取必要字段，大幅减少输出量
-	cmd := exec.CommandContext(ctx, getFFprobePath(),
+// ProbeWithRetry analyzes a stream URL and retries with fallback UAs on failure
+func ProbeWithRetry(url string, timeout time.Duration) *StreamInfo {
+	info := ProbeWithUA(url, timeout, "")
+	if info.Available {
+		return info
+	}
+
+	for _, ua := range fallbackUserAgents {
+		retryInfo := ProbeWithUA(url, timeout, ua)
+		if retryInfo.Available {
+			retryInfo.UsedFallback = ua
+			return retryInfo
+		}
+	}
+
+	return info
+}
+
+// calcBitrateFromPacketsWithUA 通过采样packets计算码率，支持User-Agent
+func calcBitrateFromPacketsWithUA(ctx context.Context, url string, info *StreamInfo, userAgent string) {
+	args := []string{
 		"-v", "quiet",
 		"-select_streams", "v:0",
 		"-show_entries", "packet=size,pts_time,stream_index",
 		"-read_intervals", "%+2",
 		"-of", "json",
-		url,
-	)
+	}
+
+	if userAgent != "" {
+		args = append(args, "-user_agent", userAgent)
+	}
+	args = append(args, url)
+
+	cmd := exec.CommandContext(ctx, getFFprobePath(), args...)
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -369,8 +403,24 @@ func calcBitrateFromPackets(ctx context.Context, url string, info *StreamInfo) {
 	}
 }
 
+// calcBitrateFromPackets 通过采样packets计算码率 (deprecated, use calcBitrateFromPacketsWithUA instead)
+// 调用者 Probe() 已持有信号量，此处不再获取
+func calcBitrateFromPackets(ctx context.Context, url string, info *StreamInfo) {
+	calcBitrateFromPacketsWithUA(ctx, url, info, "")
+}
+
+// UserAgents for retry logic
+var fallbackUserAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+	"VLC/3.0.16 LibVLC/3.0.16",
+	"AppleCoreMedia/1.0.0.19A346 (Apple TV; U; CPU OS 15_0 like Mac OS X; en_us)",
+}
+
 // CheckAvailability performs a quick availability check without full probing
 func CheckAvailability(url string, timeout time.Duration) (bool, time.Duration, error) {
+	if !IsFFprobeAvailable() {
+		return false, 0, fmt.Errorf("ffprobe executable not found (set M3U_SCANNER_FFPROBE or install ffprobe)")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -392,12 +442,46 @@ func CheckAvailability(url string, timeout time.Duration) (bool, time.Duration, 
 	return err == nil, elapsed, err
 }
 
+// CheckAvailabilityWithRetry performs a quick availability check with fallback user agents on failure
+func CheckAvailabilityWithRetry(url string, timeout time.Duration) (bool, time.Duration, error, string) {
+	ok, elapsed, err := CheckAvailability(url, timeout)
+	if ok {
+		return ok, elapsed, err, ""
+	}
+
+	// Retry with fallback UAs
+	start := time.Now()
+	for _, ua := range fallbackUserAgents {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+		cmd := exec.CommandContext(ctx, getFFprobePath(),
+			"-v", "quiet",
+			"-analyzeduration", "1000000", // 1 second
+			"-probesize", "1000000",
+			"-user_agent", ua,
+			url,
+		)
+
+		err := cmd.Run()
+		cancel()
+
+		if err == nil {
+			return true, time.Since(start), nil, ua
+		}
+	}
+
+	return false, time.Since(start), err, ""
+}
+
 // ClassifyError categorizes an error into a stable type string
 func ClassifyError(err error) string {
 	if err == nil {
 		return ""
 	}
 	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "ffprobe executable not found") || strings.Contains(s, "executable file not found") {
+		return "ffprobe_not_found"
+	}
 	if strings.Contains(s, "timeout") || strings.Contains(s, "deadline exceeded") {
 		return "timeout"
 	}

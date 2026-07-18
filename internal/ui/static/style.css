@@ -600,3 +600,18 @@ textarea { font-family: var(--font-mono); resize: vertical; }
     margin-left: 12px; white-space: nowrap;
 }
 .staleness-indicator.stale { color: var(--warning); }
+
+/* Channel logo in list */
+.channel-logo {
+    width: 28px; height: 28px; border-radius: 4px; object-fit: contain;
+    flex-shrink: 0; background: var(--bg-surface-active); padding: 2px;
+}
+
+/* Duplicate badge */
+.dup-badge {
+    display: inline-block; padding: 0 5px; margin-left: 4px;
+    font-size: 0.6rem; font-weight: 700; font-family: var(--font-mono);
+    border-radius: 3px; text-transform: uppercase; letter-spacing: 0.05em;
+    background: var(--warning-subtle); color: var(--warning);
+    border: 1px solid var(--warning-subtle); vertical-align: middle;
+}

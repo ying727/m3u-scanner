@@ -22,6 +22,7 @@ const userAgents = {
 };
 
 const errorTypeLabels = {
+    'ffprobe_not_found': 'FFprobe 未找到',
     'timeout': '请求超时',
     'connection_refused': '连接被拒绝',
     'not_found': '未找到 (404)',
@@ -43,6 +44,7 @@ const settingsBtn = document.getElementById('settingsBtn');
 const filterInput = document.getElementById('filterInput');
 const resolutionFilter = document.getElementById('resolutionFilter');
 const showAvailable = document.getElementById('showAvailable');
+const hideDuplicates = document.getElementById('hideDuplicates');
 const quickCheck = document.getElementById('quickCheck');
 const channelList = document.getElementById('channelList');
 const detailPanel = document.getElementById('detailPanel');
@@ -50,6 +52,16 @@ const statusText = document.getElementById('statusText');
 const progressContainer = document.getElementById('progressContainer');
 const progressBar = document.getElementById('progressBar');
 const ffprobeStatus = document.getElementById('ffprobeStatus');
+
+// Tools Modal Elements
+const toolsBtn = document.getElementById('toolsBtn');
+const toolsModal = document.getElementById('toolsModal');
+const closeToolsModal = document.getElementById('closeToolsModal');
+const deduplicateBtn = document.getElementById('deduplicateBtn');
+const applyRenameBtn = document.getElementById('applyRenameBtn');
+const findText = document.getElementById('findText');
+const replaceText = document.getElementById('replaceText');
+const useRegex = document.getElementById('useRegex');
 const groupFilter = document.getElementById('groupFilter');
 const sortBy = document.getElementById('sortBy');
 
@@ -107,16 +119,24 @@ function init() {
     stopBtn.addEventListener('click', stopScan);
     rescanFailedBtn.addEventListener('click', rescanFailed);
     exportBtn.addEventListener('click', exportResults);
+    document.getElementById('exportCsvBtn').addEventListener('click', exportCsvResults);
     settingsBtn.addEventListener('click', () => showModal('settingsModal'));
     document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
     document.getElementById('themeBtn').addEventListener('click', toggleTheme);
     filterInput.addEventListener('input', renderChannelList);
     showAvailable.addEventListener('change', renderChannelList);
+    if (hideDuplicates) hideDuplicates.addEventListener('change', renderChannelList);
     quickCheck.addEventListener('change', updateQuickCheck);
     groupFilter.addEventListener('change', renderChannelList);
     resolutionFilter.addEventListener('change', renderChannelList);
     sortBy.addEventListener('change', renderChannelList);
     document.getElementById('uaPreset').addEventListener('change', selectUserAgent);
+
+    // Tools Event Listeners
+    if (toolsBtn) toolsBtn.addEventListener('click', openToolsModal);
+    if (closeToolsModal) closeToolsModal.addEventListener('click', closeToolsModalFn);
+    if (deduplicateBtn) deduplicateBtn.addEventListener('click', handleDeduplicate);
+    if (applyRenameBtn) applyRenameBtn.addEventListener('click', handleRename);
 
     // Enter key for URL modal
     document.getElementById('urlInput').addEventListener('keypress', (e) => {
@@ -215,6 +235,7 @@ async function startScan() {
         rescanFailedBtn.disabled = true;
         stopBtn.disabled = false;
         exportBtn.disabled = true;
+        document.getElementById('exportCsvBtn').disabled = true;
         progressContainer.style.display = 'block';
     } catch (err) {
         statusText.textContent = '错误: ' + err.message;
@@ -246,6 +267,7 @@ async function rescanFailed() {
         rescanFailedBtn.disabled = true;
         stopBtn.disabled = false;
         exportBtn.disabled = true;
+        document.getElementById('exportCsvBtn').disabled = true;
         progressContainer.style.display = 'block';
         statusText.textContent = `重新扫描 ${data.count} 个失败频道...`;
     } catch (err) {
@@ -266,11 +288,9 @@ async function refreshResults() {
         results = data.results || [];
         scanning = data.scanning;
 
-        // Restore selection by URL (not index) to handle scan reordering
-        if (selectedChannelUrl) {
-            const foundIndex = results.findIndex(r => r.channel.url === selectedChannelUrl);
-            selectedIndex = foundIndex >= 0 ? foundIndex : -1;
-        }
+        // Keep the selected row by its array index. URLs are not unique in
+        // many IPTV lists (DUP entries intentionally share a stream URL).
+        if (selectedIndex >= results.length) selectedIndex = -1;
 
         // Update progress
         if (data.progress && data.progress.total > 0) {
@@ -285,6 +305,7 @@ async function refreshResults() {
             rescanFailedBtn.disabled = false;
             stopBtn.disabled = true;
             exportBtn.disabled = false;
+            document.getElementById('exportCsvBtn').disabled = false;
             const available = results.filter(r => r.stream_info?.available).length;
             statusText.textContent = `完成: ${available}/${results.length} 可用`;
         }
@@ -323,9 +344,12 @@ function renderChannelList() {
     // 更新分组下拉选项
     updateGroupFilter();
 
+    // Compute duplicates for badge and filtering
+    const duplicateUrls = getDuplicateUrls();
+
     let filtered = results.filter((r, i) => {
         r._index = i;
-        if (filter && !r.channel.name.toLowerCase().includes(filter) && 
+        if (filter && !r.channel.name.toLowerCase().includes(filter) &&
             !r.channel.group_title?.toLowerCase().includes(filter)) {
             return false;
         }
@@ -345,6 +369,10 @@ function renderChannelList() {
                 return false;
             }
         }
+        // Hide duplicates filter
+        if (hideDuplicates && hideDuplicates.checked && duplicateUrls.has(r.channel.url)) {
+            return false;
+        }
         return true;
     });
 
@@ -354,19 +382,23 @@ function renderChannelList() {
     channelList.innerHTML = filtered.map(r => {
         const status = getStatus(r);
         const meta = getMeta(r);
-        const isSelected = r.channel.url === selectedChannelUrl;
+        const isSelected = r._index === selectedIndex;
         const resLabel = getResolutionLabel(r);
         const isFav = favorites.includes(r.channel.url);
         const hdrBadge = getHdrBadge(r);
+        const isDupe = duplicateUrls.has(r.channel.url);
+        const logo = r.channel.logo;
         return `
             <div class="channel-item ${isSelected ? 'selected' : ''}"
                  data-action="selectChannel" data-index="${r._index}">
                 <div class="channel-status ${status}"></div>
+                ${logo ? `<img class="channel-logo" src="${escapeHtml(logo)}" onerror="this.style.display='none'" alt="">` : ''}
                 <div class="channel-info">
                     <div class="channel-name">
                         ${isFav ? '<span class="fav-star">⭐</span>' : ''}
                         ${escapeHtml(r.channel.name)}
                         ${hdrBadge}
+                        ${isDupe ? '<span class="dup-badge" title="重复频道">DUP</span>' : ''}
                     </div>
                     <div class="channel-group">${escapeHtml(r.channel.group_title || '')}${resLabel ? ' • ' + resLabel : ''}</div>
                 </div>
@@ -455,6 +487,20 @@ function getMeta(r) {
     return '不可用';
 }
 
+// Compute set of duplicate URLs (URLs that appear more than once)
+function getDuplicateUrls() {
+    const urlCounts = {};
+    results.forEach(r => {
+        const url = r.channel.url;
+        urlCounts[url] = (urlCounts[url] || 0) + 1;
+    });
+    const dupes = new Set();
+    for (const [url, count] of Object.entries(urlCounts)) {
+        if (count > 1) dupes.add(url);
+    }
+    return dupes;
+}
+
 function selectChannel(index) {
     selectedIndex = index;
     if (index >= 0 && index < results.length) {
@@ -523,6 +569,7 @@ async function renderDetail() {
                 <div class="detail-row"><span class="detail-label">响应时间</span><span class="detail-value">${Math.round(info.response_time / 1000000)}ms</span></div>
                 ${info.error_type ? `<div class="detail-row"><span class="detail-label">错误</span><span class="detail-value danger">${escapeHtml(errorTypeLabels[info.error_type] || info.error_type)}</span></div>` :
                 info.error ? `<div class="detail-row"><span class="detail-label">错误</span><span class="detail-value danger">${escapeHtml(info.error)}</span></div>` : ''}
+                ${info.used_fallback ? `<div class="detail-row"><span class="detail-label">成功 UA</span><span class="detail-value" style="font-size:0.75rem;word-break:break-all;">${escapeHtml(info.used_fallback)}</span></div>` : ''}
             </div>
         `;
 
@@ -831,6 +878,80 @@ function stopWebPlayer() {
 
 function exportResults() {
     showStatsModal();
+}
+
+function exportCsvResults() {
+    window.location.href = '/api/export/csv';
+}
+
+// Tools functionality
+function openToolsModal() {
+    showModal('toolsModal');
+}
+
+function closeToolsModalFn() {
+    closeModal('toolsModal');
+}
+
+async function handleRename() {
+    const findTextVal = findText.value;
+    const replaceTextVal = replaceText.value;
+    const useRegexVal = useRegex.checked;
+
+    if (!findTextVal) {
+        showToast('请输入查找内容', 'warning');
+        return;
+    }
+
+    applyRenameBtn.disabled = true;
+    try {
+        const res = await fetch('/api/rename', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                find: findTextVal,
+                replace: replaceTextVal,
+                use_regex: useRegexVal
+            })
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            showToast(`成功重命名 ${data.count} 个频道`, 'success');
+            closeToolsModalFn();
+            scheduleRefresh();
+        } else {
+            showToast(data.error || '批量重命名失败', 'error');
+        }
+    } catch (e) {
+        showToast('请求失败: ' + e.message, 'error');
+    } finally {
+        applyRenameBtn.disabled = false;
+    }
+}
+
+async function handleDeduplicate() {
+    deduplicateBtn.disabled = true;
+    try {
+        const res = await fetch('/api/deduplicate', {
+            method: 'POST'
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            showToast(`成功移除 ${data.count} 个重复频道。剩余 ${data.remaining} 个。`, 'success');
+            closeToolsModalFn();
+            scheduleRefresh();
+        } else {
+            showToast(data.error || '去重失败', 'error');
+        }
+    } catch (e) {
+        showToast('请求失败: ' + e.message, 'error');
+    } finally {
+        deduplicateBtn.disabled = false;
+    }
 }
 
 function showStatsModal() {

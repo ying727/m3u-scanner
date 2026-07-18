@@ -1,0 +1,6 @@
+{
+  "concurrency": 20,
+  "timeout": 15,
+  "quickCheck": false,
+  "userAgent": ""
+}
