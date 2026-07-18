@@ -128,11 +128,11 @@ func TestParseStreams(t *testing.T) {
 func TestParseStreamsBitrateFallback(t *testing.T) {
 	streams := []ffprobeStream{
 		{
-			Index:     0,
-			CodecType: "video",
-			CodecName: "hevc",
-			Width:     3840,
-			Height:    2160,
+			Index:      0,
+			CodecType:  "video",
+			CodecName:  "hevc",
+			Width:      3840,
+			Height:     2160,
 			RFrameRate: "60/1",
 			// No BitRate set
 		},

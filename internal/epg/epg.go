@@ -3,6 +3,7 @@ package epg
 import (
 	"compress/gzip"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -108,8 +109,21 @@ func ParseURL(url string) (*EPG, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
 
-	return parseEPG(resp.Body, url)
+	source := url
+	// XMLTV providers often gzip responses without a .gz suffix.
+	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer gr.Close()
+		return parseEPG(gr, source)
+	}
+	return parseEPG(resp.Body, source)
 }
 
 func parseEPG(reader io.Reader, source string) (*EPG, error) {

@@ -1,103 +1,81 @@
-# M3U Scanner - M3U 播放列表扫描与管理工具
+# M3U Scanner
 
-功能强大的 M3U/M3U8 播放列表扫描与管理工具，附带现代化的响应式 Web 界面
+[![CI](https://github.com/ying727/m3u-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/ying727/m3u-scanner/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ying727/m3u-scanner?display_name=tag)](https://github.com/ying727/m3u-scanner/releases)
 
-## ✨ 功能特性
+M3U/M3U8 播放列表扫描与管理工具，提供现代化 Web 界面。
 
-### 核心功能
-- **📁 多源加载** - 支持直接读取本地 M3U 文件或输入远程 URL
-- **⚡ 高效并发扫描** - 多线程同时检测频道可用性，支持在设置中动态调节并发数（1-100）
-- **📊 深度流信息分析** - 自动探测并显示视频容器、编码格式、码率、分辨率、帧率以及音频流参数
-- **🖼️ 自动生成预览** - 对扫描连通的频道自动抓取画面生成缩略图
-- **📅 EPG 节目单支持** - 深度集成 EPG（电子节目单），支持 XMLTV 格式，实时显示频道当前正在播出的节目
-- **🔍 智能过滤与导出** - 支持按名称、分组搜索过滤频道，并一键将有效频道导出为全新的 M3U 文件
+## 功能
 
-### 播放与网络增强
-- **🌐 Web 原生播放** - 可以在浏览器中直接预览流媒体
-- **🛡️ 智能代理防跨域** - 后端内置针对 HLS 格式的流媒体代理，自动处理目标服务器的 CORS 限制和 User-Agent 校验，并提供直连与代理的双向回落（Fallback）机制，极大提升网页端播放成功率
-- **🎬 外部播放器调用** - 支持一键唤起 PotPlayer、VLC、IINA 等本地第三方播放器
+- 从本地文件或远程 URL 导入 M3U/M3U8 播放列表
+- 并发检测频道可用性，支持可调节并发数与超时时间
+- 使用 FFprobe 分析视频编码、码率、分辨率和音频流信息
+- 为可用频道生成预览缩略图
+- 内置 Web 播放器、HLS 代理和第三方播放器调用
+- 支持按名称、分组搜索和过滤，并可导出有效频道
+- 支持 XMLTV 格式 EPG 节目单
+- User-Agent、超时和扫描并发设置持久化保存
 
-### 系统配置
-- **⚙️ 灵活配置持久化** - 支持自定义 User-Agent、超时时间和扫描并发数，配置将自动持久化保存到本地 `settings.json` 文件
-- **🚀 快速检测模式** - 可选择仅检测 HTTP 状态以跳过复杂的流媒体参数获取，大幅提升大批量扫描速度
+## 快速开始
 
----
+可以从 [Releases](https://github.com/ying727/m3u-scanner/releases) 下载对应平台的程序，或自行编译。
 
-## 🚀 快速开始
+### 编译
 
-### 编译运行
-
-本项目由纯 Go 语言编写，编译过程无需 C 编译器依赖
+项目使用 Go 编写，编译时不强制依赖 C 编译器：
 
 ```bash
-cd m3u-scanner
 go build -o m3u-scanner.exe .
 ```
 
-启动程序：
+### 启动
 
 ```bash
 # 默认使用 8080 端口
 ./m3u-scanner.exe
 
-# 指定自定义端口
+# 指定端口
 ./m3u-scanner.exe -port 9000
 ```
 
-程序启动后会自动在默认浏览器中打开控制台：`http://localhost:8080`
+启动后打开 <http://localhost:8080>。服务默认仅监听本机地址。
 
----
+## FFmpeg/FFprobe（可选）
 
-## 📦 依赖说明 (FFmpeg/FFprobe)
+基础连通性检测和代理功能不强制依赖外部工具。若需要获取详细视频流信息或生成缩略图，请安装 FFmpeg（包含 `ffmpeg` 与 `ffprobe`），并确保命令位于系统 `PATH` 中，或与程序放在同一目录。
 
-本项目核心的连通性测试和内置代理功能**不强制依赖**外部工具即可运行
-
-但如果需要**获取详细视频流参数**和**抓取频道缩略图**，强烈建议在本地安装 FFmpeg 与 FFprobe
-
-**Windows 用户：**
-从官网下载 FFmpeg，解压后将 `ffmpeg.exe` 和 `ffprobe.exe` 放置在与 `m3u-scanner.exe` **同级目录**下，或加入系统 PATH 环境变量
-
-**macOS 用户：**
 ```bash
+# macOS
 brew install ffmpeg
+
+# Debian/Ubuntu
+sudo apt install ffmpeg
+
+# Fedora
+sudo dnf install ffmpeg
 ```
 
-**Linux 用户：**
-```bash
-sudo apt install ffmpeg  # Debian/Ubuntu
-sudo dnf install ffmpeg  # Fedora
-```
+## 使用指南
 
----
+1. 点击工具栏中的“打开文件”或“打开 URL”导入播放列表。
+2. 点击“开始扫描”检测频道；频道较多时可启用快速检测模式。
+3. 点击频道查看连通状态、缩略图、流参数和 EPG 信息。
+4. 点击“播放”在浏览器内预览，或调用 PotPlayer、VLC、IINA 等本地播放器。
+5. 扫描完成后点击“导出”，生成仅包含有效频道的新 M3U 文件。
 
-## 📖 使用指南
+## 常见问题
 
-1. **导入播放列表**
-   点击顶部工具栏的 "📁 打开文件" 或 "🌐 打开 URL" 导入你的 M3U 列表
-2. **执行扫描**
-   点击 "▶️ 开始扫描"，若列表频道数过多，建议勾选 "快速检测" 以加快速度，你可以随时点击 "⏹️ 停止" 中断扫描
-3. **查看流状态**
-   左侧列表使用颜色圆点标识连通性（绿点代表存活，红点代表失效），点击任意频道可在右侧面板查看其缩略图、流媒体参数及 EPG 节目信息
-4. **流媒体播放**
-   点击 "▶️ 播放"，选择在浏览器内通过内置播放器预览，或直接调用本地第三方播放器
-5. **清理与导出**
-   扫描结束后，点击 "💾 导出"，系统会自动剔除无效失效源，为你生成一份纯净的 M3U 文件
+- 某些频道需要特定的 `Referer` 或 `User-Agent`，可在“设置”中调整 User-Agent。
+- 扫描超时较多时，可降低并发数并适当增加超时时间。
+- EPG 设置中填入 XMLTV 链接（支持 `.xml` 和 `.gz`），程序会自动解析。
+- 缩略图无法生成时，请确认 `ffmpeg` 命令可执行。
 
----
-
-## 💡 提示与常见问题
-
-- **部分频道无法网页播放？** 
-  有些直播源不仅限制了跨域，还严格校验了 `Referer` 和特定 `User-Agent`，尝试在“设置”面板中更换一个真实的浏览器 UA，代理引擎会自动为你进行请求伪装
-- **扫描过程中大面积超时或失败？**
-  部分服务器对单一 IP 存在连接频率限制，请尝试在设置中将“并发数”调低（如 10-20），并适当延长“超时时间”
-- **如何配置 EPG？**
-  进入“设置”面板，在 EPG 源地址栏中填入支持的 XMLTV 链接（支持 `.xml` 与 `.gz`），系统会自动在后台解析并在对应频道的右侧面板展示正在播出的节目
-- **缩略图一直处于加载状态？**
-  请检查当前系统环境中是否已正确安装 FFmpeg 并确保 `ffmpeg` 命令可被执行
-
----
-
-## 📜 许可证
+## 许可证
 
 MIT License
+
+## 开发与发布
+
+Pull Request 和推送到 `main` 时，GitHub Actions 会自动执行格式检查、静态检查、race test 和跨平台编译。
+
+推送形如 `v1.0.0` 的 tag 后，会自动构建 Windows、Linux 和 macOS 的 amd64/arm64 程序，生成 SHA-256 校验文件并发布 GitHub Release。贡献说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。

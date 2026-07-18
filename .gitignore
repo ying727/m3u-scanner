@@ -38,6 +38,12 @@ thumbnails/
 
 # Local config
 *.local
+settings.json
+scan_results.json
+
+# Build output
+/bin/
+/dist/
 
 # Logs
 *.log

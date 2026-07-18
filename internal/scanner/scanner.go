@@ -30,10 +30,11 @@ type Scanner struct {
 	concurrency int
 	timeout     time.Duration
 	quickCheck  bool
+	userAgent   string
 }
 
 // NewScanner creates a new scanner instance
-func NewScanner(concurrency int, timeout time.Duration, quickCheck bool) *Scanner {
+func NewScanner(concurrency int, timeout time.Duration, quickCheck bool, userAgent string) *Scanner {
 	if concurrency <= 0 {
 		concurrency = 10
 	}
@@ -44,6 +45,7 @@ func NewScanner(concurrency int, timeout time.Duration, quickCheck bool) *Scanne
 		concurrency: concurrency,
 		timeout:     timeout,
 		quickCheck:  quickCheck,
+		userAgent:   userAgent,
 	}
 }
 
@@ -109,16 +111,32 @@ func (s *Scanner) Scan(ctx context.Context, playlist *parser.M3UPlaylist,
 
 			var streamInfo *ffprobe.StreamInfo
 			if s.quickCheck {
-				ok, responseTime, err := ffprobe.CheckAvailability(ch.URL, s.timeout)
+				var ok bool
+				var responseTime time.Duration
+				var err error
+				var fallbackUA string
+
+				if s.userAgent != "" {
+					ok, responseTime, err = ffprobe.CheckAvailability(ch.URL, s.timeout)
+					// We only use the explicitly provided UA if one is provided
+				} else {
+					ok, responseTime, err, fallbackUA = ffprobe.CheckAvailabilityWithRetry(ch.URL, s.timeout)
+				}
+
 				streamInfo = &ffprobe.StreamInfo{
 					Available:    ok,
 					ResponseTime: responseTime,
+					UsedFallback: fallbackUA,
 				}
 				if err != nil {
 					streamInfo.Error = err.Error()
 				}
 			} else {
-				streamInfo = ffprobe.Probe(ch.URL, s.timeout)
+				if s.userAgent != "" {
+					streamInfo = ffprobe.ProbeWithUA(ch.URL, s.timeout, s.userAgent)
+				} else {
+					streamInfo = ffprobe.ProbeWithRetry(ch.URL, s.timeout)
+				}
 			}
 
 			// 再次检查是否取消，避免向已关闭的channel发送
