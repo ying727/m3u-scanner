@@ -1,0 +1,23 @@
+meta {
+  name: 03 改设置
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/settings
+}
+
+body:json {
+  {
+    "concurrency": 30,
+    "timeout": 20,
+    "quickCheck": false,
+    "userAgent": ""
+  }
+}
+
+docs {
+  并发数最大 100、超时最大 120，传超了会被服务端 clamp，
+  可以故意传个 9999 试试。
+}
