@@ -218,8 +218,9 @@ func (s *Server) loadResults() {
 	s.resultsMutex.Unlock()
 }
 
-// Run starts the web server
-func (s *Server) Run(port int) error {
+// handler builds the HTTP handler for the web UI. Tests call this directly
+// so they don't need to bind a port (and Run() also reuses it).
+func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// API routes
@@ -247,6 +248,11 @@ func (s *Server) Run(port int) error {
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
 
+	return mux
+}
+
+// Run starts the web server
+func (s *Server) Run(port int) error {
 	// Bind to loopback by default: the UI exposes control and proxy endpoints
 	// and should not be reachable from the network without explicit deployment
 	// configuration.
@@ -261,7 +267,7 @@ func (s *Server) Run(port int) error {
 		openBrowser(appURL)
 	}()
 
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, s.handler())
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
@@ -688,7 +694,9 @@ func (s *Server) handleClearResults(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	s.resultsMutex.RLock()
-	results := append([]scanner.ScanResult(nil), s.results...)
+	// 用空切片而不是 nil 打底：结果为空时前端拿到 [] 而不是 null，
+	// 不然 app.js 里 results.forEach 会直接炸
+	results := append([]scanner.ScanResult{}, s.results...)
 	progress := s.progress
 	lastScanTime := s.lastScanTime
 	s.resultsMutex.RUnlock()
@@ -736,7 +744,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleExportJSON(w http.ResponseWriter, r *http.Request) {
 	s.resultsMutex.RLock()
-	results := append([]scanner.ScanResult(nil), s.results...)
+	results := append([]scanner.ScanResult{}, s.results...)
 	s.resultsMutex.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
