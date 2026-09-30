@@ -1,0 +1,21 @@
+meta {
+  name: 13 批量重命名
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{baseUrl}}/api/rename
+}
+
+body:json {
+  {
+    "find": "CCTV",
+    "replace": "央视",
+    "use_regex": false
+  }
+}
+
+docs {
+  use_regex 设 true 可以玩正则，写错了会 400。
+}

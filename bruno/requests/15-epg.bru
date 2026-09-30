@@ -1,0 +1,14 @@
+meta {
+  name: 15 查 EPG 节目单
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}/api/epg?channel_id=CCTV1
+}
+
+docs {
+  channel_id 换成你列表里真实的台标 ID（看 08 返回结果里的 tvg_id），
+  对不上就返回 available: false。
+}

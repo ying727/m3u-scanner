@@ -1,0 +1,20 @@
+meta {
+  name: 05 从 URL 加载列表
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/load-url
+}
+
+body:json {
+  {
+    "url": "https://example.com/list.m3u"
+  }
+}
+
+docs {
+  URL 换成真实的 m3u 链接。内网 IP（192.168.x.x、127.0.0.1）会被拦掉，
+  可以故意试一个看 400。
+}

@@ -1,0 +1,14 @@
+meta {
+  name: 09 清空结果
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/api/results/clear
+}
+
+docs {
+  清完再调 08，结果应该是空数组 []。之前这里返回过 null，
+  前端 forEach 直接炸，已经修了（回归用）。
+}

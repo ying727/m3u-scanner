@@ -1,0 +1,18 @@
+meta {
+  name: 04 上传播放列表
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/upload
+}
+
+body:form-data {
+  file: @file(../../example.m3u)
+}
+
+docs {
+  发之前先手动选文件：点 body 那行，把 @file() 里的路径换成你自己的 .m3u 文件，
+  或者直接用仓库根目录的 example.m3u。注意这是 multipart，得选文件不能直接贴文本。
+}
