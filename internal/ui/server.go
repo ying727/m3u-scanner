@@ -218,8 +218,9 @@ func (s *Server) loadResults() {
 	s.resultsMutex.Unlock()
 }
 
-// Run starts the web server
-func (s *Server) Run(port int) error {
+// handler builds the HTTP handler for the web UI. Tests call this directly
+// so they don't need to bind a port (and Run() also reuses it).
+func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// API routes
@@ -247,6 +248,11 @@ func (s *Server) Run(port int) error {
 	// Static files
 	mux.HandleFunc("/", s.handleStatic)
 
+	return mux
+}
+
+// Run starts the web server
+func (s *Server) Run(port int) error {
 	// Bind to loopback by default: the UI exposes control and proxy endpoints
 	// and should not be reachable from the network without explicit deployment
 	// configuration.
@@ -261,7 +267,7 @@ func (s *Server) Run(port int) error {
 		openBrowser(appURL)
 	}()
 
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, s.handler())
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
