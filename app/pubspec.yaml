@@ -1,0 +1,34 @@
+name: m3u_scanner_app
+description: "M3U Scanner - 开箱即用的 IPTV 频道检测桌面客户端"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 状态管理
+  provider: ^6.1.2
+  # HTTP 客户端(对接 Go sidecar API)
+  http: ^1.4.0
+  # Windows 播放器(libmpv 内核,支持 HLS)
+  media_kit: ^1.2.0
+  media_kit_video: ^1.2.0
+  media_kit_libs_windows_video: ^1.0.10
+  # 文件选择/保存
+  file_selector: ^1.0.3
+  # Windows 窗口体验(记住窗口大小、最小尺寸约束)
+  window_manager: ^0.4.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
