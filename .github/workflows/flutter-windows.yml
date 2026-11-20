@@ -91,6 +91,7 @@ jobs:
 
       - name: Assemble portable bundle
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         run: |
           $release = 'app/build/windows/x64/runner/Release'
           if (-not (Test-Path $release)) { throw "Release dir missing: $release" }
