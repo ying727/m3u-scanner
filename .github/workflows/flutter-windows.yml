@@ -42,7 +42,8 @@ jobs:
       - name: Build Go sidecar
         working-directory: ${{ github.workspace }}
         run: |
-          go build -trimpath -ldflags "-s -w" -o app/backend/m3u-scanner.exe .
+          # windowsgui 子系统:sidecar 运行时不弹控制台黑窗
+          go build -trimpath -ldflags "-s -w -H=windowsgui" -o app/backend/m3u-scanner.exe .
           ls -la app/backend/
 
       - name: Set up Flutter ${{ env.FLUTTER_VERSION }}

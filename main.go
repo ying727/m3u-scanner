@@ -21,6 +21,10 @@ func main() {
 	}
 
 	server := ui.NewServer()
+	if *parentPID > 0 {
+		// 内嵌 sidecar:无窗口、无浏览器、纯 headless API
+		server.EnableSidecarMode()
+	}
 	if err := server.Run(*port); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

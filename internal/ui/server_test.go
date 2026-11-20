@@ -316,3 +316,29 @@ func TestExportEmpty(t *testing.T) {
 		t.Errorf("body 应该以 #EXTM3U 开头, 实际 %q", rr.Body.String())
 	}
 }
+
+// sidecar(桌面客户端内嵌)模式:核心 API 在,web UI 与专属端点裁掉
+func TestSidecarModeRoutes(t *testing.T) {
+	s := NewServer()
+	s.EnableSidecarMode()
+
+	// 核心 API 正常
+	rr := doAPI(t, s, http.MethodGet, "/api/status", nil, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/api/status 期望 200, 实际 %d", rr.Code)
+	}
+
+	// 静态 web UI 不再挂载
+	rr = doAPI(t, s, http.MethodGet, "/", nil, "")
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("/ 期望 404, 实际 %d", rr.Code)
+	}
+
+	// web-UI 专属端点裁掉
+	for _, path := range []string{"/api/epg", "/api/rename", "/api/thumbnail", "/api/play", "/api/deduplicate", "/api/scan/single"} {
+		rr = doAPI(t, s, http.MethodGet, path, nil, "")
+		if rr.Code != http.StatusNotFound {
+			t.Errorf("%s 期望 404, 实际 %d", path, rr.Code)
+		}
+	}
+}
