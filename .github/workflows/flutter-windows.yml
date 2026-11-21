@@ -1,0 +1,128 @@
+name: Flutter Windows Portable
+
+# 构建"开箱即用"的 Windows 便携包:
+#   Flutter 主程序 + backend/m3u-scanner.exe(Go sidecar)+ backend/ffprobe.exe(深度检测)
+# 解压后双击 m3u-scanner-app.exe 即可,无需外部服务或浏览器。
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', 'main.go', 'watchdog.go', '.github/workflows/flutter-windows.yml']
+  pull_request:
+    paths: ['app/**', 'main.go', 'watchdog.go']
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: '3.47.9'
+  FFPROBE_URL: 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+
+jobs:
+  windows-portable:
+    name: Windows portable
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build Go sidecar
+        working-directory: ${{ github.workspace }}
+        run: |
+          # windowsgui 子系统:sidecar 运行时不弹控制台黑窗
+          go build -trimpath -ldflags "-s -w -H=windowsgui" -o app/backend/m3u-scanner.exe .
+          ls -la app/backend/
+
+      - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
+        run: |
+          git clone --depth 1 --branch ${{ env.FLUTTER_VERSION }} https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" --version
+
+      - name: Resolve dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Cache ffprobe
+        id: cache-ffprobe
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ffprobe.exe
+          key: ffprobe-essentials-v1
+
+      - name: Download ffprobe
+        if: steps.cache-ffprobe.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg-essentials.zip'
+          Invoke-WebRequest -Uri $env:FFPROBE_URL -OutFile $zip
+          $extract = Join-Path $env:RUNNER_TEMP 'ffmpeg-extract'
+          Expand-Archive -Path $zip -DestinationPath $extract -Force
+          $probe = Get-ChildItem -Path $extract -Recurse -Filter 'ffprobe.exe' | Select-Object -First 1
+          if (-not $probe) { throw 'ffprobe.exe not found in archive' }
+          Copy-Item $probe.FullName (Join-Path $env:RUNNER_TEMP 'ffprobe.exe')
+
+      - name: Stage ffprobe for sidecar
+        shell: pwsh
+        run: Copy-Item (Join-Path $env:RUNNER_TEMP 'ffprobe.exe') 'backend/ffprobe.exe'
+
+      - name: Build Windows app
+        shell: pwsh
+        run: |
+          flutter build windows --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble portable bundle
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          $release = 'app/build/windows/x64/runner/Release'
+          if (-not (Test-Path $release)) { throw "Release dir missing: $release" }
+
+          # sidecar + ffprobe 进入 backend/ 子目录
+          New-Item -ItemType Directory -Force "$release/backend" | Out-Null
+          Copy-Item 'app/backend/m3u-scanner.exe' "$release/backend/"
+          Copy-Item 'app/backend/ffprobe.exe' "$release/backend/"
+
+          # VC 运行时 DLL 与 Flutter 主程序同级(tyg 验证过的做法)
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw 'Visual C++ runtime not found' }
+          Copy-Item "$($crt.FullName)/*.dll" $release
+
+          New-Item -ItemType Directory -Force app/dist | Out-Null
+          Compress-Archive -Path "$release/*" -DestinationPath 'app/dist/m3u-scanner-windows-x64.zip'
+          Get-ChildItem app/dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m3u-scanner-windows-x64
+          path: app/dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: gh release upload "$($env:GITHUB_REF_NAME -replace '^refs/tags/','')" 'dist/m3u-scanner-windows-x64.zip' --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

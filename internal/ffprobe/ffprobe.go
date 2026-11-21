@@ -247,7 +247,7 @@ func ProbeWithUA(url string, timeout time.Duration, userAgent string) *StreamInf
 	args = append(args, url)
 
 	// 第一步：获取基本流信息
-	cmd := exec.CommandContext(ctx, getFFprobePath(), args...)
+	cmd := newCmd(ctx, getFFprobePath(), args...)
 
 	output, err := cmd.Output()
 	info.ResponseTime = time.Since(start)
@@ -317,7 +317,7 @@ func calcBitrateFromPacketsWithUA(ctx context.Context, url string, info *StreamI
 	}
 	args = append(args, url)
 
-	cmd := exec.CommandContext(ctx, getFFprobePath(), args...)
+	cmd := newCmd(ctx, getFFprobePath(), args...)
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -425,7 +425,7 @@ func CheckAvailability(url string, timeout time.Duration) (bool, time.Duration, 
 	defer cancel()
 
 	start := time.Now()
-	cmd := exec.CommandContext(ctx, getFFprobePath(),
+	cmd := newCmd(ctx, getFFprobePath(),
 		"-v", "quiet",
 		"-analyzeduration", "1000000", // 1 second
 		"-probesize", "1000000",
@@ -454,7 +454,7 @@ func CheckAvailabilityWithRetry(url string, timeout time.Duration) (bool, time.D
 	for _, ua := range fallbackUserAgents {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
-		cmd := exec.CommandContext(ctx, getFFprobePath(),
+		cmd := newCmd(ctx, getFFprobePath(),
 			"-v", "quiet",
 			"-analyzeduration", "1000000", // 1 second
 			"-probesize", "1000000",
@@ -608,7 +608,7 @@ func parseFrameRate(rate string) float64 {
 
 // IsFFprobeAvailable checks if ffprobe is installed and accessible
 func IsFFprobeAvailable() bool {
-	cmd := exec.Command(getFFprobePath(), "-version")
+	cmd := newCmdSimple(getFFprobePath(), "-version")
 	return cmd.Run() == nil
 }
 

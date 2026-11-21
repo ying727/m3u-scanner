@@ -108,7 +108,29 @@
 
 到 [Releases](https://github.com/ying727/m3u-scanner/releases) 下载对应系统的压缩包，解压后双击运行即可，程序会自动在浏览器里打开控制台。
 
-### 2. 自行从源码编译
+### 2. Windows 桌面客户端（开箱即用，原生窗口）
+
+不想用浏览器？可以直接用 Flutter 桌面客户端。到 GitHub Actions 的 **Flutter Windows Portable** 工作流下载 `m3u-scanner-windows-x64` 构件，解压后**双击 `m3u-scanner-app.exe` 即可**：
+
+- Go 后端作为 sidecar 内嵌（`backend/m3u-scanner.exe`），启动时自动拉起，退出时自动回收；
+- 后端以 **GUI 子系统 + headless 模式**构建运行：不弹控制台黑窗、不自动开浏览器、不挂 web 静态页，仅暴露客户端所需 API；
+- `backend/ffprobe.exe` 随包分发，深度检测（分辨率/编码信息）开箱即用；
+- 内置 libmpv 播放器，播放走后端 HLS 代理，复用 UA/Referer 修复逻辑；
+- 配置与结果保存在 `backend/settings.json`、`backend/scan_results.json`，便携式、不写注册表。
+
+开发调试客户端时，可直连已运行的后端：
+
+```bash
+# 先启动 Go 后端
+./m3u-scanner -port 8080
+
+# 另开终端，直连模式运行 Flutter 客户端
+cd app
+set M3U_SCANNER_BACKEND_URL=http://127.0.0.1:8080
+flutter run -d windows
+```
+
+### 3. 自行从源码编译
 
 要求 Go 1.21 或更高版本：
 
@@ -129,7 +151,7 @@ go build -o m3u-scanner .
 
 启动后在浏览器打开 <http://localhost:8080> 即可。
 
-### 3. 关于 FFmpeg / FFprobe（可选）
+### 4. 关于 FFmpeg / FFprobe（可选）
 
 基础连通性检测、M3U 导入导出、内置播放器均**不需要**安装任何外部软件。
 

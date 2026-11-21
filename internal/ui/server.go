@@ -57,6 +57,10 @@ type Server struct {
 	thumbDir   string
 
 	epgData *epg.EPG
+
+	// sidecarMode: 作为桌面客户端的内嵌后端运行。跳过浏览器自启与静态 UI,
+	// 并裁掉客户端用不到的 web-UI 专属端点。
+	sidecarMode bool
 }
 
 // Settings holds scanner settings
@@ -101,6 +105,13 @@ func NewServer() *Server {
 	s.loadSettings()
 	s.loadResults()
 	return s
+}
+
+// EnableSidecarMode puts the server into embedded-backend mode: no browser
+// auto-open, no bundled web UI, and only the API surface the desktop client
+// uses. The desktop client owns the interface in this mode.
+func (s *Server) EnableSidecarMode() {
+	s.sidecarMode = true
 }
 
 func configDir() string {
@@ -223,7 +234,7 @@ func (s *Server) loadResults() {
 func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// API routes
+	// API routes — core surface used by both the web UI and the desktop client
 	mux.HandleFunc("/api/upload", s.handleUpload)
 	mux.HandleFunc("/api/load-url", s.handleLoadURL)
 	mux.HandleFunc("/api/scan/start", s.handleStartScan)
@@ -232,21 +243,25 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/api/export", s.handleExport)
 	mux.HandleFunc("/api/export/json", s.handleExportJSON)
 	mux.HandleFunc("/api/export/csv", s.handleExportCSV)
-	mux.HandleFunc("/api/rename", s.handleRename)
-	mux.HandleFunc("/api/deduplicate", s.handleDeduplicate)
-	mux.HandleFunc("/api/play", s.handlePlay)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/events", s.handleSSE)
-	mux.HandleFunc("/api/thumbnail", s.handleThumbnail)
 	mux.HandleFunc("/api/stream", s.handleStream)
-	mux.HandleFunc("/api/scan/single", s.handleScanSingle)
 	mux.HandleFunc("/api/scan/failed", s.handleScanFailed)
 	mux.HandleFunc("/api/results/clear", s.handleClearResults)
-	mux.HandleFunc("/api/epg", s.handleEPG)
 
-	// Static files
-	mux.HandleFunc("/", s.handleStatic)
+	// Web-UI-only endpoints; sidecar mode (desktop client) doesn't serve them
+	if !s.sidecarMode {
+		mux.HandleFunc("/api/rename", s.handleRename)
+		mux.HandleFunc("/api/deduplicate", s.handleDeduplicate)
+		mux.HandleFunc("/api/play", s.handlePlay)
+		mux.HandleFunc("/api/thumbnail", s.handleThumbnail)
+		mux.HandleFunc("/api/scan/single", s.handleScanSingle)
+		mux.HandleFunc("/api/epg", s.handleEPG)
+
+		// Static files
+		mux.HandleFunc("/", s.handleStatic)
+	}
 
 	return mux
 }
@@ -260,12 +275,15 @@ func (s *Server) Run(port int) error {
 	appURL := fmt.Sprintf("http://localhost:%d", port)
 
 	fmt.Printf("M3U Scanner 启动: %s\n", appURL)
-	fmt.Println("按 Ctrl+C 停止服务")
 
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		openBrowser(appURL)
-	}()
+	// 内嵌 sidecar 模式:桌面客户端就是 UI,不再自动弹浏览器
+	if !s.sidecarMode {
+		fmt.Println("按 Ctrl+C 停止服务")
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			openBrowser(appURL)
+		}()
+	}
 
 	return http.ListenAndServe(addr, s.handler())
 }
