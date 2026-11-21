@@ -1,7 +1,27 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state.dart';
+import '../theme.dart';
+
+/// 打开本地 m3u 文件并上传为当前源。
+Future<void> openLocalSource(BuildContext context) async {
+  final state = context.read<AppState>();
+  try {
+    final file = await openFile(
+      acceptedTypeGroups: [
+        XTypeGroup(label: 'M3U', extensions: ['m3u', 'm3u8', 'txt']),
+      ],
+    );
+    if (file == null) return;
+    final bytes = await file.readAsBytes();
+    await state.uploadM3U(bytes, file.name);
+    if (context.mounted) showMessage(context, '已加载 ${file.name}');
+  } catch (e) {
+    if (context.mounted) showMessage(context, e.toString());
+  }
+}
 
 /// 从 URL 加载播放列表源。
 Future<void> showLoadUrlDialog(BuildContext context) async {
@@ -23,7 +43,8 @@ Future<void> showLoadUrlDialog(BuildContext context) async {
             onPressed: () => Navigator.pop(ctx, false),
             child: const Text('取消')),
         FilledButton(
-            onPressed: () => Navigator.pop(ctx, true), child: const Text('加载')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('加载')),
       ],
     ),
   );
@@ -32,14 +53,8 @@ Future<void> showLoadUrlDialog(BuildContext context) async {
 
   try {
     await context.read<AppState>().loadUrl(url);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('源已加载')));
-    }
+    if (context.mounted) showMessage(context, '源已加载');
   } catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
-    }
+    if (context.mounted) showMessage(context, e.toString());
   }
 }

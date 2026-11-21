@@ -30,6 +30,7 @@ class AppState extends ChangeNotifier {
 
   ScanResult? selected;
   String? lastActionError;
+  String? sourceLabel; // 当前加载的源(文件名或 URL),仅会话内展示用
 
   Future<void> init() async {
     try {
@@ -122,12 +123,14 @@ class AppState extends ChangeNotifier {
   Future<void> uploadM3U(Uint8List bytes, String filename) =>
       _action(() async {
         await api.uploadM3U(bytes, filename);
+        sourceLabel = filename;
         await refreshAll();
         return '已加载 $filename';
       });
 
   Future<void> loadUrl(String url) => _action(() async {
         await api.loadUrl(url);
+        sourceLabel = url;
         await refreshAll();
         return '已加载源';
       });

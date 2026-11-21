@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'state.dart';
+import 'theme.dart';
 import 'ui/home_page.dart';
 
 Future<void> main() async {
@@ -35,25 +36,8 @@ class AppRoot extends StatelessWidget {
       child: MaterialApp(
         title: 'M3U Scanner',
         debugShowCheckedModeBanner: false,
-        theme: _theme(),
+        theme: appTheme(),
         home: const HomePage(),
-      ),
-    );
-  }
-
-  ThemeData _theme() {
-    const seed = Color(0xFF2E7D6F);
-    final scheme = ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: scheme,
-      visualDensity: VisualDensity.compact,
-      scaffoldBackgroundColor: scheme.surface,
-      cardTheme: const CardThemeData(margin: EdgeInsets.zero, elevation: 0),
-      inputDecorationTheme: const InputDecorationTheme(
-        isDense: true,
-        border: OutlineInputBorder(),
-        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models.dart';
 import '../state.dart';
+import '../theme.dart';
 
 /// 扫描设置。对应后端 Settings{concurrency,timeout,quickCheck,userAgent}。
 Future<void> showSettingsDialog(BuildContext context) async {
@@ -44,15 +45,21 @@ Future<void> showSettingsDialog(BuildContext context) async {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('快速检测(仅 HTTP 探活)'),
-                subtitle: const Text('关闭后使用 ffprobe 深度检测,可获取分辨率/编码信息'),
+                title: const Text(
+                  '快速检测(仅 HTTP 探活)',
+                  style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                ),
+                subtitle: Text(
+                  '关闭后使用 ffprobe 深度检测,可获取分辨率/编码信息',
+                  style: TextStyle(fontSize: 11.5, color: context.muted),
+                ),
                 value: quickCheck,
                 onChanged: (v) => setState(() => quickCheck = v),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 12),
               TextField(
                 controller: userAgent,
                 decoration: const InputDecoration(
@@ -60,10 +67,12 @@ Future<void> showSettingsDialog(BuildContext context) async {
                   hintText: '留空使用默认 UA',
                 ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                'ffprobe 状态:${(state.backendStatus?.ffprobeAvailable ?? false) ? '已就绪' : '未找到(深度检测不可用)'}',
-                style: Theme.of(ctx).textTheme.bodySmall,
+              const SizedBox(height: 14),
+              Notice(
+                (state.backendStatus?.ffprobeAvailable ?? false)
+                    ? 'ffprobe 已就绪,深度检测可用。'
+                    : '未检测到 ffprobe.exe,深度检测不可用,将只能进行快速探活。',
+                error: !(state.backendStatus?.ffprobeAvailable ?? false),
               ),
             ],
           ),
@@ -73,7 +82,13 @@ Future<void> showSettingsDialog(BuildContext context) async {
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('取消')),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+            style: FilledButton.styleFrom(
+              backgroundColor: pine,
+              foregroundColor: leaf,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('保存'),
+          ),
         ],
       ),
     ),
@@ -89,15 +104,9 @@ Future<void> showSettingsDialog(BuildContext context) async {
   );
   try {
     await state.saveSettings(newSettings);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('设置已保存')));
-    }
+    if (context.mounted) showMessage(context, '设置已保存');
   } catch (e) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
-    }
+    if (context.mounted) showMessage(context, e.toString());
   }
 }
 
