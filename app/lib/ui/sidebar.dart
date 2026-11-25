@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
@@ -16,7 +17,7 @@ class Sidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final ffprobe = state.backendStatus?.ffprobeAvailable ?? false;
+    final ffprobe = state.ffprobeAvailable ?? false;
 
     return SizedBox(
       width: 232,
@@ -91,8 +92,7 @@ class Sidebar extends StatelessWidget {
         ],
       );
       if (file == null) return;
-      final bytes = await file.readAsBytes();
-      await state.uploadM3U(bytes, file.name);
+      await state.uploadM3U(file.path, file.name);
     } catch (e) {
       if (context.mounted) showMessage(context, e.toString());
     }
@@ -122,12 +122,66 @@ class Sidebar extends StatelessWidget {
         final ext = kind == 'csv' ? 'csv' : kind == 'json' ? 'json' : 'm3u';
         final location = await getSaveLocation(suggestedName: 'available_channels.$ext');
         if (location == null) return;
-        final bytes = await state.api.export(kind);
-        await File(location.path).writeAsBytes(bytes);
+        final content = _exportContent(state, kind);
+        await File(location.path).writeAsString(content);
+        if (context.mounted) showMessage(context, '已导出到 ${location.path}');
       } catch (e) {
         if (context.mounted) showMessage(context, e.toString());
       }
     });
+  }
+
+  /// 在本地生成导出内容,只输出可用频道。
+  String _exportContent(AppState state, String kind) {
+    final available =
+        state.payload.results.where((r) => r.available).toList();
+
+    if (kind == 'json') {
+      return const JsonEncoder.withIndent('  ').convert(
+        {
+          'exported_at': DateTime.now().toIso8601String(),
+          'total': available.length,
+          'channels': [
+            for (final r in available)
+              {
+                'name': r.channel.name,
+                'url': r.channel.url,
+                'group': r.channel.groupTitle,
+                'resolution': r.streamInfo?.resolution ?? '',
+                'response_ms': r.streamInfo?.responseTimeMs ?? 0,
+              },
+          ],
+        },
+      );
+    }
+
+    if (kind == 'csv') {
+      String esc(String v) => '"${v.replaceAll('"', '""')}"';
+      final b = StringBuffer('name,group,url,resolution,response_ms\n');
+      for (final r in available) {
+        b.writeln([
+          esc(r.channel.name),
+          esc(r.channel.groupTitle),
+          esc(r.channel.url),
+          esc(r.streamInfo?.resolution ?? ''),
+          '${r.streamInfo?.responseTimeMs ?? 0}',
+        ].join(','));
+      }
+      return b.toString();
+    }
+
+    final b = StringBuffer('#EXTM3U\n');
+    for (final r in available) {
+      final c = r.channel;
+      final attrs = <String>[
+        if (c.tvgId.isNotEmpty) 'tvg-id="${c.tvgId}"',
+        if (c.logo.isNotEmpty) 'tvg-logo="${c.logo}"',
+        if (c.groupTitle.isNotEmpty) 'group-title="${c.groupTitle}"',
+      ].join(' ');
+      b.writeln('#EXTINF:-1${attrs.isEmpty ? '' : ' $attrs'},${c.name}');
+      b.writeln(c.url);
+    }
+    return b.toString();
   }
 }
 

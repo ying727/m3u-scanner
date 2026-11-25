@@ -9,7 +9,7 @@ import 'sidebar.dart';
 import 'watch_rail.dart';
 
 /// 主界面:侧栏 + 主内容(扫描控制台/频道网格) + 观看栏。
-/// 同时负责窗口关闭时回收 sidecar。
+/// 同时负责窗口关闭时取消扫描并释放原生资源。
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 

@@ -69,10 +69,10 @@ Future<void> showSettingsDialog(BuildContext context) async {
               ),
               const SizedBox(height: 14),
               Notice(
-                (state.backendStatus?.ffprobeAvailable ?? false)
+                (state.ffprobeAvailable ?? false)
                     ? 'ffprobe 已就绪,深度检测可用。'
                     : '未检测到 ffprobe.exe,深度检测不可用,将只能进行快速探活。',
-                error: !(state.backendStatus?.ffprobeAvailable ?? false),
+                error: !(state.ffprobeAvailable ?? false),
               ),
             ],
           ),

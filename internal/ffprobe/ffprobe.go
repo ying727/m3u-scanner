@@ -72,6 +72,14 @@ func ReleaseSemaphore() {
 	releaseSemaphore()
 }
 
+// SetPath pins the ffprobe executable used by every subsequent probe. Desktop
+// clients call this at startup so a bundled ffprobe is found regardless of the
+// host process's own executable directory.
+func SetPath(path string) {
+	ffprobePathOnce.Do(func() {}) // 锁定 Once,避免后续被自动探测覆盖
+	ffprobePath = path
+}
+
 // getFFprobePath finds ffprobe executable
 // Priority: 1. Same directory as exe  2. PATH
 func getFFprobePath() string {

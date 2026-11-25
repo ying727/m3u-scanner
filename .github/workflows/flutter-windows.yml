@@ -1,8 +1,8 @@
 name: Flutter Windows Portable
 
 # 构建"开箱即用"的 Windows 便携包:
-#   Flutter 主程序 + backend/m3u-scanner.exe(Go sidecar)+ backend/ffprobe.exe(深度检测)
-# 解压后双击 m3u-scanner-app.exe 即可,无需外部服务或浏览器。
+#   Flutter 主程序 + m3u_core.dll(Go 核心库,FFI 进程内直调)+ ffprobe.exe
+# 解压后双击 m3u-scanner-app.exe 即可:无后端进程、无端口、无浏览器。
 
 on:
   push:
@@ -39,12 +39,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build Go sidecar
+      - name: Build Go core DLL
         working-directory: ${{ github.workspace }}
+        env:
+          CGO_ENABLED: '1'
         run: |
-          # windowsgui 子系统:sidecar 运行时不弹控制台黑窗
-          go build -trimpath -ldflags "-s -w -H=windowsgui" -o app/backend/m3u-scanner.exe .
-          ls -la app/backend/
+          # 进程内 FFI 库:客户端直调,不起服务、不开端口
+          mkdir -p app/libm3u
+          go build -trimpath -buildmode=c-shared -o app/libm3u/m3u_core.dll ./cmd/libm3u
+          ls -la app/libm3u/
 
       - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
         run: |
@@ -80,9 +83,9 @@ jobs:
           if (-not $probe) { throw 'ffprobe.exe not found in archive' }
           Copy-Item $probe.FullName (Join-Path $env:RUNNER_TEMP 'ffprobe.exe')
 
-      - name: Stage ffprobe for sidecar
+      - name: Stage ffprobe next to the app
         shell: pwsh
-        run: Copy-Item (Join-Path $env:RUNNER_TEMP 'ffprobe.exe') 'backend/ffprobe.exe'
+        run: Copy-Item (Join-Path $env:RUNNER_TEMP 'ffprobe.exe') 'libm3u/ffprobe.exe'
 
       - name: Build Windows app
         shell: pwsh
@@ -97,10 +100,9 @@ jobs:
           $release = 'app/build/windows/x64/runner/Release'
           if (-not (Test-Path $release)) { throw "Release dir missing: $release" }
 
-          # sidecar + ffprobe 进入 backend/ 子目录
-          New-Item -ItemType Directory -Force "$release/backend" | Out-Null
-          Copy-Item 'app/backend/m3u-scanner.exe' "$release/backend/"
-          Copy-Item 'app/backend/ffprobe.exe' "$release/backend/"
+          # 核心 DLL 与 ffprobe 与主程序同级(Dart 按可执行文件目录加载)
+          Copy-Item 'app/libm3u/m3u_core.dll' $release
+          Copy-Item 'app/libm3u/ffprobe.exe' $release
 
           # VC 运行时 DLL 与 Flutter 主程序同级(tyg 验证过的做法)
           $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath

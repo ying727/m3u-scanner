@@ -34,9 +34,21 @@ class _WatchRailState extends State<WatchRail> {
     super.dispose();
   }
 
+  /// 直连播放:由 mpv 自己带 UA/Referer,不再经过本地 HTTP 代理。
   void _play(String url) {
     _playingUrl = url;
-    _player.open(Media(url));
+    final ua = context.read<AppState>().settings.userAgent;
+    _player.open(Media(
+      url,
+      httpHeaders: {
+        'User-Agent': ua.isEmpty
+            ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+            : ua,
+        // 部分 CDN 校验 Referer;用流自身地址兜底
+        'Referer': url,
+      },
+    ));
   }
 
   void _stop() {
@@ -68,9 +80,7 @@ class _WatchRailState extends State<WatchRail> {
                   controller: _controller,
                   playingUrl: _playingUrl,
                   onPlay: () {
-                    final proxyUrl =
-                        state.api.streamUrl(result.channel.url);
-                    _play(proxyUrl);
+                    _play(result.channel.url);
                     setState(() {});
                   },
                   onStop: _stop,
@@ -128,8 +138,7 @@ class _Watching extends StatelessWidget {
   Widget build(BuildContext context) {
     final ch = result.channel;
     final info = result.streamInfo;
-    final proxyUrl = context.read<AppState>().api.streamUrl(ch.url);
-    final isPlaying = playingUrl == proxyUrl;
+    final isPlaying = playingUrl == ch.url;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

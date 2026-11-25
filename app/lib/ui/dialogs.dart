@@ -15,8 +15,7 @@ Future<void> openLocalSource(BuildContext context) async {
       ],
     );
     if (file == null) return;
-    final bytes = await file.readAsBytes();
-    await state.uploadM3U(bytes, file.name);
+    await state.uploadM3U(file.path, file.name);
     if (context.mounted) showMessage(context, '已加载 ${file.name}');
   } catch (e) {
     if (context.mounted) showMessage(context, e.toString());

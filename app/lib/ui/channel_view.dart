@@ -33,7 +33,7 @@ class ChannelView extends StatelessWidget {
               const Spacer(),
               const SizedBox(width: 12),
               FFprobeBadge(
-                ready: state.backendStatus?.ffprobeAvailable ?? false,
+                ready: state.ffprobeAvailable ?? false,
               ),
             ],
           ),

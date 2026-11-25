@@ -22,6 +22,8 @@ dependencies:
   media_kit_libs_windows_video: ^1.0.10
   # 文件选择/保存
   file_selector: ^1.0.3
+  # FFI 绑定 Go 核心库
+  ffi: ^2.1.0
   # Windows 窗口体验(记住窗口大小、最小尺寸约束)
   window_manager: ^0.4.3
 

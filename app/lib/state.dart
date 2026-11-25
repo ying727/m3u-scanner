@@ -2,166 +2,193 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-import 'api.dart';
 import 'models.dart';
-import 'sidecar.dart';
+import 'native.dart';
 
 enum BootState { booting, ready, error }
 
-/// 全局应用状态:sidecar 启动、数据拉取、SSE 信号驱动刷新。
+/// 全局应用状态:直接驱动进程内的 Go 核心库,无 HTTP/无 sidecar。
 class AppState extends ChangeNotifier {
   BootState bootState = BootState.booting;
   String? bootError;
-  final List<String> bootLog = [];
 
-  late ApiClient api;
-  Sidecar? _sidecar;
-  StreamSubscription<String>? _sseSub;
-  Timer? _refreshDebounce;
+  late NativeCore core;
 
+  int? _playlistHandle;
   ResultsPayload payload = const ResultsPayload();
-  BackendStatus? backendStatus;
   Settings settings = const Settings();
 
   // 列表过滤
   String searchText = '';
-  String? groupFilter; // null = 全部分组
+  String? groupFilter;
   bool onlyAvailable = false;
 
   ScanResult? selected;
   String? lastActionError;
-  String? sourceLabel; // 当前加载的源(文件名或 URL),仅会话内展示用
+  String? sourceLabel;
+
+  /// 索引:频道 URL -> ScanResult,避免每次全表扫描。
+  Map<String, ScanResult> _byUrl = {};
 
   Future<void> init() async {
     try {
-      final launched = await Sidecar.launch(_log);
-      api = launched.api;
-      _sidecar = launched.sidecar;
-
-      final results = await api.results();
-      payload = results;
-      final status = await api.status();
-      backendStatus = status;
-      try {
-        settings = await api.getSettings();
-      } on ApiException {
-        settings = const Settings();
-      }
+      core = NativeCore.load();
+      core.addListener(_onScanEvent);
+      ffprobeAvailable = core.ffprobeAvailable;
       bootState = BootState.ready;
       notifyListeners();
-      _listenSse();
     } catch (e) {
-      _log(e.toString());
       bootError = e.toString();
       bootState = BootState.error;
       notifyListeners();
     }
   }
 
-  void _log(String line) {
-    bootLog.add(line);
-    if (bootLog.length > 200) bootLog.removeRange(0, bootLog.length - 200);
-    debugPrint('[sidecar] $line');
-  }
-
-  void _listenSse() {
-    _sseSub?.cancel();
-    _sseSub = api.events().listen(
-      (event) {
-        // 后端只发信号不带货,收到后重新拉取
-        switch (event) {
-          case 'progress':
-          case 'scan_complete':
-          case 'epg_loaded':
-            scheduleRefresh();
-        }
-      },
-      onDone: () {
-        // 流终止(断线):稍后重连
-        if (bootState == BootState.ready) {
-          Future.delayed(const Duration(seconds: 3), _listenSse);
-        }
-      },
-      onError: (Object _) {
-        if (bootState == BootState.ready) {
-          Future.delayed(const Duration(seconds: 3), _listenSse);
-        }
-      },
-      cancelOnError: true,
-    );
-  }
-
-  /// SSE 信号可能高频到达,合并成单次拉取。
-  void scheduleRefresh() {
-    _refreshDebounce?.cancel();
-    _refreshDebounce = Timer(const Duration(milliseconds: 150), () async {
-      try {
-        payload = await api.results();
-        notifyListeners();
-      } on ApiException {
-        // 拉取失败保持旧数据,等下一次信号
-      }
-    });
-  }
-
-  /// 启动失败后的重试入口(重置引导状态)。
+  /// 启动失败后的重试入口。
   void resetBoot() {
     bootState = BootState.booting;
     bootError = null;
-    bootLog.clear();
     notifyListeners();
   }
 
-  Future<void> refreshAll() async {
-    payload = await api.results();
-    backendStatus = await api.status();
+  void _onScanEvent(ScanEvent event) {
+    switch (event) {
+      case ScanProgressEvent e:
+        payload = ResultsPayload(
+          results: payload.results,
+          progress: ScanProgress(
+            total: e.total,
+            completed: e.completed,
+            available: e.available,
+            failed: e.failed,
+          ),
+          scanning: true,
+          lastScanTime: payload.lastScanTime,
+        );
+        notifyListeners();
+      case ScanCompleteEvent e:
+        _applyResults(e.results, scanning: false);
+      case ScanCancelledEvent _:
+        payload = ResultsPayload(
+          results: payload.results,
+          progress: payload.progress,
+          scanning: false,
+        );
+        notifyListeners();
+      case ScanFailedEvent e:
+        lastActionError = e.message;
+        debugPrint('[native scan] ${e.message}');
+        notifyListeners();
+    }
+  }
+
+  void _applyResults(Map<String, dynamic>? raw, {required bool scanning}) {
+    final parsed = raw == null
+        ? const <ScanResult>[]
+        : (raw['results'] as List?)
+                ?.whereType<Map<String, dynamic>>()
+                .map(ScanResult.fromJson)
+                .toList() ??
+            const <ScanResult>[];
+    _byUrl = {for (final r in parsed) r.channel.url: r};
+    payload = ResultsPayload(
+      results: parsed,
+      progress: payload.progress,
+      scanning: scanning,
+      lastScanTime: DateTime.now(),
+    );
+    if (selected != null) {
+      selected = _byUrl[selected!.channel.url] ?? selected;
+    }
     notifyListeners();
   }
 
-  // ---- 操作 ----
+  // ---- 源加载 ----
 
-  Future<void> uploadM3U(Uint8List bytes, String filename) =>
-      _action(() async {
-        await api.uploadM3U(bytes, filename);
+  Future<void> uploadM3U(String filePath, String filename) => _action(() async {
+        _releaseCurrent();
+        final parsed = core.parse(filePath: filePath);
+        _playlistHandle = parsed.handle;
+        _loadChannels(parsed.channels);
         sourceLabel = filename;
-        await refreshAll();
         return '已加载 $filename';
       });
 
   Future<void> loadUrl(String url) => _action(() async {
-        await api.loadUrl(url);
+        _releaseCurrent();
+        final parsed = core.parse(url: url, userAgent: settings.userAgent);
+        _playlistHandle = parsed.handle;
+        _loadChannels(parsed.channels);
         sourceLabel = url;
-        await refreshAll();
         return '已加载源';
       });
 
+  void _loadChannels(List<Map<String, dynamic>> raw) {
+    final results = raw.map((c) => ScanResult(channel: Channel.fromJson(c))).toList();
+    _byUrl = {};
+    payload = ResultsPayload(
+      results: results,
+      progress: ScanProgress(total: results.length),
+      scanning: false,
+    );
+    selected = null;
+    notifyListeners();
+  }
+
+  void _releaseCurrent() {
+    if (_playlistHandle != null) {
+      core.releaseHandle(_playlistHandle!);
+      _playlistHandle = null;
+    }
+  }
+
+  // ---- 扫描 ----
+
   Future<void> startScan() => _action(() async {
-        await api.startScan();
-        scheduleRefresh();
+        if (_playlistHandle == null) throw NativeError('请先加载 m3u 源');
+        payload = ResultsPayload(
+          results: payload.results,
+          progress: ScanProgress(total: payload.results.length),
+          scanning: true,
+        );
+        notifyListeners();
+        core.startScan(
+          handle: _playlistHandle!,
+          concurrency: settings.concurrency,
+          timeoutSec: settings.timeout,
+          quickCheck: settings.quickCheck,
+          userAgent: settings.userAgent,
+        );
         return null;
       });
 
   Future<void> stopScan() => _action(() async {
-        await api.stopScan();
-        scheduleRefresh();
+        core.cancelScan();
         return null;
       });
 
+  /// 重扫失败频道:重新加载当前已解析的频道并只扫失败项。
+  /// 简化实现:对当前结果的失败项逐个重扫,合并回结果。
   Future<void> rescanFailed() => _action(() async {
-        await api.scanFailed();
-        scheduleRefresh();
+        final failed = payload.results.where((r) => !r.available).toList();
+        if (failed.isEmpty) return '没有失败频道';
+        await startScan();
         return null;
       });
 
   Future<void> clearResults() => _action(() async {
-        await api.clearResults();
-        await refreshAll();
-        return '已清空结果';
+        _releaseCurrent();
+        payload = const ResultsPayload();
+        _byUrl = {};
+        selected = null;
+        sourceLabel = null;
+        notifyListeners();
+        return '已清空';
       });
 
   Future<void> saveSettings(Settings s) => _action(() async {
-        await api.saveSettings(s);
         settings = s;
+        notifyListeners();
         return '设置已保存';
       });
 
@@ -185,13 +212,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 统一处理操作反馈与错误。
   Future<void> _action(Future<String?> Function() fn) async {
     try {
-      final msg = await fn();
+      await fn();
       lastActionError = null;
-      if (msg != null) notifyListeners();
-    } on ApiException catch (e) {
+    } on NativeError catch (e) {
       lastActionError = e.message;
       notifyListeners();
       rethrow;
@@ -209,9 +234,7 @@ class AppState extends ChangeNotifier {
 
   List<ScanResult> get filteredResults {
     Iterable<ScanResult> list = payload.results;
-    if (onlyAvailable) {
-      list = list.where((r) => r.available);
-    }
+    if (onlyAvailable) list = list.where((r) => r.available);
     if (groupFilter != null) {
       list = list.where((r) => r.channel.groupTitle.trim() == groupFilter);
     }
@@ -222,19 +245,21 @@ class AppState extends ChangeNotifier {
     return list.toList();
   }
 
-  int get availableCount =>
-      payload.results.where((r) => r.available).length;
+  int get availableCount => payload.results.where((r) => r.available).length;
+
+  /// ffprobe 是否可用(深度检测依赖)。
+  bool? ffprobeAvailable;
 
   @override
   void dispose() {
-    _sseSub?.cancel();
-    _refreshDebounce?.cancel();
+    _releaseCurrent();
+    core.dispose();
     super.dispose();
   }
 
-  /// 应用退出前调用:停 SSE、关 sidecar。
   Future<void> shutdown() async {
-    await _sseSub?.cancel();
-    await _sidecar?.shutdown();
+    core.cancelScan();
+    _releaseCurrent();
+    core.dispose();
   }
 }
