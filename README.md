@@ -108,7 +108,28 @@
 
 到 [Releases](https://github.com/ying727/m3u-scanner/releases) 下载对应系统的压缩包，解压后双击运行即可，程序会自动在浏览器里打开控制台。
 
-### 2. 自行从源码编译
+### 2. Windows 桌面客户端（开箱即用，原生窗口）
+
+不想用浏览器？可以直接用 Flutter 桌面客户端。到 GitHub Actions 的 **Flutter Windows Portable** 工作流下载 `m3u-scanner-windows-x64` 构件，解压后**双击 `m3u-scanner-app.exe` 即可**：
+
+- Go 核心逻辑编成 `m3u_core.dll`，客户端通过 `dart:ffi` **在同一进程内直接调用**——没有后端服务、没有监听端口、没有子进程；
+- 同一份 Go 代码两种包装：仓库根的 `go build .` 仍是原来的 web 服务端，`./cmd/libm3u` 产出给桌面端的动态库；
+- `ffprobe.exe` 随包分发，深度检测（分辨率/编码信息）开箱即用；
+- 内置 libmpv 播放器，直连播放并自带 UA/Referer，无需本地代理重写 HLS；
+- 完全便携：不写注册表、不开端口，关掉窗口即全部释放。
+
+开发调试客户端时，先构建一次核心库放到可执行文件旁：
+
+```bash
+cd app
+# 构建 Go 动态库(需要 C 工具链,Windows 可用 MinGW;CI 里用 MSVC)
+cd ..
+CGO_ENABLED=1 go build -buildmode=c-shared -o app/build/windows/x64/runner/Release/m3u_core.dll ./cmd/libm3u
+cd app
+flutter run -d windows
+```
+
+### 3. 自行从源码编译
 
 要求 Go 1.21 或更高版本：
 
@@ -129,7 +150,7 @@ go build -o m3u-scanner .
 
 启动后在浏览器打开 <http://localhost:8080> 即可。
 
-### 3. 关于 FFmpeg / FFprobe（可选）
+### 4. 关于 FFmpeg / FFprobe（可选）
 
 基础连通性检测、M3U 导入导出、内置播放器均**不需要**安装任何外部软件。
 
