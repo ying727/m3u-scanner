@@ -112,21 +112,20 @@
 
 不想用浏览器？可以直接用 Flutter 桌面客户端。到 GitHub Actions 的 **Flutter Windows Portable** 工作流下载 `m3u-scanner-windows-x64` 构件，解压后**双击 `m3u-scanner-app.exe` 即可**：
 
-- Go 后端作为 sidecar 内嵌（`backend/m3u-scanner.exe`），启动时自动拉起，退出时自动回收；
-- 后端以 **GUI 子系统 + headless 模式**构建运行：不弹控制台黑窗、不自动开浏览器、不挂 web 静态页，仅暴露客户端所需 API；
-- `backend/ffprobe.exe` 随包分发，深度检测（分辨率/编码信息）开箱即用；
-- 内置 libmpv 播放器，播放走后端 HLS 代理，复用 UA/Referer 修复逻辑；
-- 配置与结果保存在 `backend/settings.json`、`backend/scan_results.json`，便携式、不写注册表。
+- Go 核心逻辑编成 `m3u_core.dll`，客户端通过 `dart:ffi` **在同一进程内直接调用**——没有后端服务、没有监听端口、没有子进程；
+- 同一份 Go 代码两种包装：仓库根的 `go build .` 仍是原来的 web 服务端，`./cmd/libm3u` 产出给桌面端的动态库；
+- `ffprobe.exe` 随包分发，深度检测（分辨率/编码信息）开箱即用；
+- 内置 libmpv 播放器，直连播放并自带 UA/Referer，无需本地代理重写 HLS；
+- 完全便携：不写注册表、不开端口，关掉窗口即全部释放。
 
-开发调试客户端时，可直连已运行的后端：
+开发调试客户端时，先构建一次核心库放到可执行文件旁：
 
 ```bash
-# 先启动 Go 后端
-./m3u-scanner -port 8080
-
-# 另开终端，直连模式运行 Flutter 客户端
 cd app
-set M3U_SCANNER_BACKEND_URL=http://127.0.0.1:8080
+# 构建 Go 动态库(需要 C 工具链,Windows 可用 MinGW;CI 里用 MSVC)
+cd ..
+CGO_ENABLED=1 go build -buildmode=c-shared -o app/build/windows/x64/runner/Release/m3u_core.dll ./cmd/libm3u
+cd app
 flutter run -d windows
 ```
 
